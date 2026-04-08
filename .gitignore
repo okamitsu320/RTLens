@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+
+# Wave dumps and traces
+*.vcd
+*.fst
+*.fsdb
+*.vpd
+*.wlf
+
+# Build outputs
+build/
+out/
+obj/
+
+# rtlens generated artifacts
+rtlens/bin/slang_dump
+rtlens/**/__pycache__/
+
+# Keep nested upstream repos independent from this root repo
+simview/
+slang/
+surfer/
+comment_doc/

@@ -1,0 +1,4 @@
++incdir+src
+src/vm_min_leaf.sv
+src/vm_min_stage.sv
+src/vm_min_top.sv

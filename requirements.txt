@@ -1,0 +1,9 @@
+# Python package dependencies
+PySide6>=6.5
+
+# System-level dependencies (not pip-installable):
+# - python3-tk  (Tk UI, e.g. apt install python3-tk)
+# - yosys       (schematic generation backend)
+# - sv2v        (SystemVerilog-to-Verilog conversion)
+# - netlistsvg  (npm install -g netlistsvg)
+# - gtkwave     (provides fst2vcd for .fst support)

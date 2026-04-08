@@ -1,0 +1,5 @@
++incdir+src
+src/vm_mid_alu.sv
+src/vm_mid_lane.sv
+src/vm_mid_router.sv
+src/vm_mid_top.sv
