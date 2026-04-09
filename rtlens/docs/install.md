@@ -247,10 +247,33 @@ python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-re
 .venv/bin/python rtlens/tools/verify_install.py --target-os mac
 ```
 
-Known limitation:
+Known limitations and environment notes:
 
 - Monterey 12.x can fail during slang build (`<source_location>` / toolchain issues).
-- Treat these as environment constraints for now, not release blockers.
+- `gcc` resolves to Apple Clang on macOS (Homebrew gcc is an alias). This is expected.
+- If slang build fails with `<bit>`, `<any>`, or `<array>` not found, the
+  Command Line Tools SDK path is likely broken. Run the following minimal check:
+
+  ```bash
+  echo '#include <bit>
+  #include <any>
+  int main(){}' | clang++ -std=c++20 -x c++ -
+  ```
+
+  If this fails, reinstall Command Line Tools:
+
+  ```bash
+  sudo rm -rf /Library/Developer/CommandLineTools
+  xcode-select --install
+  ```
+
+  If you have Xcode.app installed, switch to it instead:
+
+  ```bash
+  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+  ```
+
+- Treat macOS failures as environment constraints for now, not release blockers.
 
 ## 5. Optional tools and release links
 
