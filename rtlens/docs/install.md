@@ -250,28 +250,22 @@ python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-re
 Known limitations and environment notes:
 
 - Monterey 12.x can fail during slang build (`<source_location>` / toolchain issues).
-- `gcc` resolves to Apple Clang on macOS (Homebrew gcc is an alias). This is expected.
-- If slang build fails with `<bit>`, `<any>`, or `<array>` not found, the
-  Command Line Tools SDK path is likely broken. Run the following minimal check:
+- `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard library
+  support (`<bit>`, `<any>`, `<array>` etc. may not be found). This is a known
+  Apple Clang limitation, not a Command Line Tools breakage.
+- **Fix**: use Homebrew GCC (real GCC, installed as `gcc-15` or similar) via
+  `RTLENS_CXX_COMPILER`:
 
   ```bash
-  echo '#include <bit>
-  #include <any>
-  int main(){}' | clang++ -std=c++20 -x c++ -
+  # Find the Homebrew GCC c++ compiler
+  ls $(brew --prefix gcc)/bin/g++-*
+
+  # Set it for RTLens (adjust version number as needed)
+  export RTLENS_CXX_COMPILER=$(brew --prefix gcc)/bin/g++-15
   ```
 
-  If this fails, reinstall Command Line Tools:
-
-  ```bash
-  sudo rm -rf /Library/Developer/CommandLineTools
-  xcode-select --install
-  ```
-
-  If you have Xcode.app installed, switch to it instead:
-
-  ```bash
-  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-  ```
+  Then launch RTLens normally. The slang_dump build will use Homebrew GCC instead
+  of Apple Clang and the C++20 headers will be found correctly.
 
 - Treat macOS failures as environment constraints for now, not release blockers.
 
