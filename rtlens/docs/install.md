@@ -253,19 +253,39 @@ Known limitations and environment notes:
 - `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard library
   support (`<bit>`, `<any>`, `<array>` etc. may not be found). This is a known
   Apple Clang limitation, not a Command Line Tools breakage.
-- **Fix**: use Homebrew GCC (real GCC, installed as `gcc-15` or similar) via
-  `RTLENS_CXX_COMPILER`:
+- **Fix**: use Homebrew GCC (real GCC, installed as `gcc-15` or similar).
+  `brew --prefix gcc` resolves correctly on both Intel (`/usr/local/opt/gcc`)
+  and Apple Silicon (`/opt/homebrew/opt/gcc`) Macs.
 
   ```bash
-  # Find the Homebrew GCC c++ compiler
+  # Step 1: find the installed version (number may change with future Homebrew updates)
   ls $(brew --prefix gcc)/bin/g++-*
+  # e.g. output: .../g++-15
 
-  # Set it for RTLens (adjust version number as needed)
+  # Step 2: set CXX/CC for the slang library build (adjust version number as shown above)
+  export CXX=$(brew --prefix gcc)/bin/g++-15
+  export CC=$(brew --prefix gcc)/bin/gcc-15
+
+  # Step 3: rebuild slang (--clean required to discard the Apple Clang cache)
+  python3 rtlens/tools/setup_slang_prefix.py --clean --slang-ref v10.0 --checkout-ref
+
+  # Step 4: also set RTLENS_CXX_COMPILER for the slang_dump build inside RTLens
   export RTLENS_CXX_COMPILER=$(brew --prefix gcc)/bin/g++-15
   ```
 
-  Then launch RTLens normally. The slang_dump build will use Homebrew GCC instead
-  of Apple Clang and the C++20 headers will be found correctly.
+  Note: the version suffix (`-15`) will increase as Homebrew updates GCC.
+  Always check `ls $(brew --prefix gcc)/bin/g++-*` to confirm the current name.
+
+- If RTLens exits immediately with `Could not find the Qt platform plugin "cocoa"`,
+  the venv was created with a non-framework Python. Recreate it with Homebrew Python:
+
+  ```bash
+  brew install python@3.12
+  /usr/local/opt/python@3.12/bin/python3.12 -m venv .venv --clear
+  .venv/bin/pip install -e ".[dev]"
+  ```
+
+  On Apple Silicon, replace `/usr/local/opt/` with `/opt/homebrew/opt/`.
 
 - Treat macOS failures as environment constraints for now, not release blockers.
 
