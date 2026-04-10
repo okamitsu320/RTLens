@@ -251,8 +251,32 @@ Known limitations and environment notes:
 
 - Monterey 12.x can fail during slang build (`<source_location>` / toolchain issues).
 - `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard library
-  support (`<bit>`, `<any>`, `<array>` etc. may not be found). This is a known
-  Apple Clang limitation, not a Command Line Tools breakage.
+  support (`<bit>`, `<any>`, `<array>` etc. may not be found). This can also be
+  caused by a broken Command Line Tools SDK path.
+  Before switching compilers, verify that Apple Clang itself can compile C++20
+  headers:
+
+  ```bash
+  echo '#include <bit>
+  #include <any>
+  int main(){}' | clang++ -std=c++20 -x c++ -
+  ```
+
+  If this fails, reinstall Command Line Tools:
+
+  ```bash
+  sudo rm -rf /Library/Developer/CommandLineTools
+  xcode-select --install
+  ```
+
+  If you have Xcode.app installed, switch to it instead:
+
+  ```bash
+  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+  ```
+
+  If Apple Clang still cannot find `<bit>` after reinstalling, use Homebrew GCC:
+
 - **Fix**: use Homebrew GCC (real GCC, installed as `gcc-15` or similar).
   `brew --prefix gcc` resolves correctly on both Intel (`/usr/local/opt/gcc`)
   and Apple Silicon (`/opt/homebrew/opt/gcc`) Macs.
@@ -334,8 +358,6 @@ cd ..
 .venv/bin/python rtlens/tools/gui_regression_cases.py --mode run --case mid_case
 ```
 
-See details: `rtlens/docs/macos-pyside6-qpa-debug.md`.
-
 ### 4-E. slang / fmt ABI check
 
 If `slang_dump` link errors include:
@@ -359,7 +381,19 @@ rm -f rtlens/bin/slang_dump rtlens/bin/slang_dump.meta
 On macOS+GCC, setup now prepares private fmt under `.deps/fmt-gcc` and records
 its `fmt_dir` in slang toolchain metadata.
 
-See details: `rtlens/docs/macos-slang-fmt-abi-debug.md`.
+### 4-F. GUI smoke
+
+```bash
+.venv/bin/python rtlens/tools/gui_regression_cases.py --mode run --case mid_case
+.venv/bin/python rtlens/tools/gui_regression_cases.py --mode run --case min_case
+.venv/bin/python rtlens/tools/gui_regression_cases.py --mode run --case deep_case
+```
+
+Direct usage samples:
+
+```bash
+.venv/bin/python rtlens/tools/run_usage_samples.py --mode run --case mid_case
+```
 
 ## 5. Optional tools and release links
 

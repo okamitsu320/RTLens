@@ -57,12 +57,6 @@ rtlens --filelist <vlist_file> --top <top_module>
 
 See [rtlens/docs/install.md](rtlens/docs/install.md) for Linux/Windows/macOS installation details.
 
-macOS troubleshooting references:
-
-- [rtlens/docs/macos-fix-summary.md](rtlens/docs/macos-fix-summary.md)
-- [rtlens/docs/macos-pyside6-qpa-debug.md](rtlens/docs/macos-pyside6-qpa-debug.md)
-- [rtlens/docs/macos-slang-fmt-abi-debug.md](rtlens/docs/macos-slang-fmt-abi-debug.md)
-
 ## Usage
 
 ```
