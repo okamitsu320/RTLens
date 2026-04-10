@@ -38,6 +38,11 @@ A desktop viewer for SystemVerilog designs — source, hierarchy, signal connect
 - Large RTL designs are not yet part of the standard regression set.
 - Performance characterization (startup / parse / schematic prebuild / memory) is not finalized yet.
 
+## Distribution Scope
+
+- Current release scope is source-code distribution only.
+- Prebuilt binaries / installers are not distributed as of April 2026.
+
 ## Quick Start
 
 ```bash

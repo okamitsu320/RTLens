@@ -22,6 +22,8 @@ Distribution type: PyPI/runtime dependency (not vendored in this repository).
 | PySide6_Addons | installed metadata (transitive) | PySide6 runtime dependency | `LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only` | `importlib.metadata("PySide6_Addons")` |
 
 Notes:
+- Current public release scope (as of April 2026) is source-only distribution.
+  Prebuilt binaries are not shipped.
 - Binary redistribution obligations must be reviewed separately from source-only publication.
 
 ## 3. Vendored Node Dependencies in Repository

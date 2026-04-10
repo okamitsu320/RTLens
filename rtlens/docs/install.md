@@ -248,9 +248,14 @@ cd third_party/elk && npm ci && cd ../..
 ls $(brew --prefix gcc)/bin/g++-*
 # e.g. output: .../g++-15
 
-# Step 2: set CXX/CC (adjust version number as shown above)
-export CXX=$(brew --prefix gcc)/bin/g++-15
-export CC=$(brew --prefix gcc)/bin/gcc-15
+# Step 2: set CXX/CC from the detected Homebrew GCC
+GCC_PREFIX="$(brew --prefix gcc)"
+GXX_PATH="$(ls "$GCC_PREFIX"/bin/g++-* | sort -t- -k2,2n | tail -n 1)"
+GCC_PATH="${GXX_PATH/g++-/gcc-}"
+export CXX="$GXX_PATH"
+export CC="$GCC_PATH"
+export RTLENS_CXX_COMPILER="$GXX_PATH"
+# As of 2026-04, many environments resolve to g++-15 / gcc-15.
 
 python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-ref v10.0 --checkout-ref
 .venv/bin/python rtlens/tools/verify_install.py --target-os mac
@@ -259,30 +264,11 @@ python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-re
 Known limitations and environment notes:
 
 - Monterey 12.x can fail during slang build (`<source_location>` / toolchain issues).
-- `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard library
-  support (`<bit>`, `<any>`, `<array>` etc. may not be found). **Always use
-  Homebrew GCC** for the slang build; Apple Clang is not supported.
-  `brew --prefix gcc` resolves correctly on both Intel (`/usr/local/opt/gcc`)
-  and Apple Silicon (`/opt/homebrew/opt/gcc`) Macs.
-
-  ```bash
-  # Step 1: find the installed version (number may change with future Homebrew updates)
-  ls $(brew --prefix gcc)/bin/g++-*
-  # e.g. output: .../g++-15
-
-  # Step 2: set CXX/CC for the slang library build (adjust version number as shown above)
-  export CXX=$(brew --prefix gcc)/bin/g++-15
-  export CC=$(brew --prefix gcc)/bin/gcc-15
-
-  # Step 3: rebuild slang (--clean required to discard the Apple Clang cache)
-  python3 rtlens/tools/setup_slang_prefix.py --clean --slang-ref v10.0 --checkout-ref
-
-  # Step 4: also set RTLENS_CXX_COMPILER for the slang_dump build inside RTLens
-  export RTLENS_CXX_COMPILER=$(brew --prefix gcc)/bin/g++-15
-  ```
-
-  Note: the version suffix (`-15`) will increase as Homebrew updates GCC.
-  Always check `ls $(brew --prefix gcc)/bin/g++-*` to confirm the current name.
+- `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard
+  library support for this flow. **Always use Homebrew GCC** for slang/slang_dump.
+  `brew --prefix gcc` resolves correctly on Intel (`/usr/local/opt/gcc`) and
+  Apple Silicon (`/opt/homebrew/opt/gcc`) Macs.
+  See detailed steps in `4-E`.
 
 - If RTLens exits immediately with `Could not find the Qt platform plugin "cocoa"`,
   the venv was created with a non-framework Python. Recreate it with Homebrew Python:
@@ -295,27 +281,7 @@ Known limitations and environment notes:
 
   On Apple Silicon, replace `/usr/local/opt/` with `/opt/homebrew/opt/`.
 
-- If GUI launch fails with:
-
-  ```text
-  qt.qpa.plugin: Could not find the Qt platform plugin "cocoa" in ""
-  This application failed to start because no Qt platform plugin could be initialized.
-  ```
-
-  and `libqcocoa.dylib` exists in the venv, check hidden flags first:
-
-  ```bash
-  .venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --check
-  ls -lO@ .venv/lib/python*/site-packages/PySide6/Qt/plugins/platforms
-  ```
-
-  If hidden flags are present on plugin paths:
-
-  ```bash
-  .venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --fix-hidden-flags --venv .venv
-  # equivalent:
-  chflags -R nohidden .venv
-  ```
+- Qt `cocoa` plugin troubleshooting steps are in `4-D`.
 
 - Treat macOS failures as environment constraints for now, not release blockers.
 
@@ -353,10 +319,14 @@ fmt::v12::vformat[abi:cxx11]
 rebuild slang with Homebrew GCC environment and rebuild helper:
 
 ```bash
-# choose installed GCC major version first (example: g++-15)
-ls $(brew --prefix gcc)/bin/g++-*
-export CXX=$(brew --prefix gcc)/bin/g++-15
-export CC=$(brew --prefix gcc)/bin/gcc-15
+# choose installed GCC major version first (as of 2026-04, often g++-15)
+GCC_PREFIX="$(brew --prefix gcc)"
+ls "$GCC_PREFIX"/bin/g++-*
+GXX_PATH="$(ls "$GCC_PREFIX"/bin/g++-* | sort -t- -k2,2n | tail -n 1)"
+GCC_PATH="${GXX_PATH/g++-/gcc-}"
+export CXX="$GXX_PATH"
+export CC="$GCC_PATH"
+export RTLENS_CXX_COMPILER="$GXX_PATH"
 python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-ref v10.0 --checkout-ref
 rm -f rtlens/bin/slang_dump rtlens/bin/slang_dump.meta
 .venv/bin/python rtlens/tools/verify_install.py --target-os mac
