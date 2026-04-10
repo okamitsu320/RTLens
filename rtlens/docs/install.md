@@ -287,7 +287,79 @@ Known limitations and environment notes:
 
   On Apple Silicon, replace `/usr/local/opt/` with `/opt/homebrew/opt/`.
 
+- If GUI launch fails with:
+
+  ```text
+  qt.qpa.plugin: Could not find the Qt platform plugin "cocoa" in ""
+  This application failed to start because no Qt platform plugin could be initialized.
+  ```
+
+  and `libqcocoa.dylib` exists in the venv, check hidden flags first:
+
+  ```bash
+  .venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --check
+  ls -lO@ .venv/lib/python*/site-packages/PySide6/Qt/plugins/platforms
+  ```
+
+  If hidden flags are present on plugin paths:
+
+  ```bash
+  .venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --fix-hidden-flags --venv .venv
+  # equivalent:
+  chflags -R nohidden .venv
+  ```
+
 - Treat macOS failures as environment constraints for now, not release blockers.
+
+### 4-D. PySide6 / Qt platform plugin check
+
+Run:
+
+```bash
+.venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --check
+```
+
+If hidden flags are reported, apply:
+
+```bash
+.venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --fix-hidden-flags --venv .venv
+```
+
+Then retry:
+
+```bash
+cd rtlens
+../.venv/bin/python -c "from PySide6.QtWidgets import QApplication; app=QApplication([]); print(app.platformName())"
+cd ..
+.venv/bin/python rtlens/tools/gui_regression_cases.py --mode run --case mid_case
+```
+
+See details: `rtlens/docs/macos-pyside6-qpa-debug.md`.
+
+### 4-E. slang / fmt ABI check
+
+If `slang_dump` link errors include:
+
+```text
+fmt::v12::vformat[abi:cxx11]
+```
+
+rebuild slang with Homebrew GCC environment and rebuild helper:
+
+```bash
+# choose installed GCC major version first (example: g++-15)
+ls $(brew --prefix gcc)/bin/g++-*
+export CXX=$(brew --prefix gcc)/bin/g++-15
+export CC=$(brew --prefix gcc)/bin/gcc-15
+python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-ref v10.0 --checkout-ref
+rm -f rtlens/bin/slang_dump rtlens/bin/slang_dump.meta
+.venv/bin/python rtlens/tools/verify_install.py --target-os mac
+```
+
+On macOS+GCC, setup now prepares private fmt under `.deps/fmt-gcc` and records
+its `fmt_dir` in slang toolchain metadata.
+
+See details: `rtlens/docs/macos-slang-fmt-abi-debug.md`.
 
 ## 5. Optional tools and release links
 

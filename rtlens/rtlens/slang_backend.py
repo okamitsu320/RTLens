@@ -51,7 +51,7 @@ class SlangBackendError(RuntimeError):
 # Tag embedded in toolchain meta to track the current CMakeLists build recipe.
 # Bump this string whenever the generated CMakeLists.txt template changes in a
 # way that requires the cached slang_dump binary to be rebuilt.
-_CMAKELISTS_RECIPE_TAG = "static-mingw-runtime-v3"
+_CMAKELISTS_RECIPE_TAG = "static-mingw-runtime-v4-prefix-toolchain"
 _SLANG_PREFIX_TOOLCHAIN_META_REL = Path("share/rtlens/slang_toolchain_meta.json")
 _WINDOWS_NATIVE_CRASH_CACHE: Dict[str, str] = {}
 
@@ -136,6 +136,10 @@ def _read_slang_prefix_toolchain_meta(prefix: Optional[Path]) -> Dict[str, objec
             out[str(key)] = value
     out["meta_path"] = str(meta)
     return out
+
+
+def _meta_text(meta: Dict[str, object], key: str) -> str:
+    return str(meta.get(key, "") or "").strip()
 
 
 def _unique_paths(candidates: Sequence[Path]) -> List[Path]:
@@ -766,12 +770,36 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
 """
     (src_dir / "CMakeLists.txt").write_text(cmakelists, encoding="utf-8")
 
-    def _windows_toolchain_args() -> Tuple[List[str], str]:
+    prefix_meta = _read_slang_prefix_toolchain_meta(slang_prefix)
+
+    def _toolchain_args() -> Tuple[List[str], str]:
+        args: List[str] = []
+        info_parts: List[str] = []
+
+        fmt_dir = str(os.environ.get("RTLENS_FMT_DIR", "") or _meta_text(prefix_meta, "fmt_dir")).strip()
+        if fmt_dir:
+            args.append(f"-Dfmt_DIR={fmt_dir}")
+            info_parts.append(f"fmt_dir={fmt_dir}")
+
+        meta_cxx = _meta_text(prefix_meta, "cxx_compiler_resolved") or _meta_text(prefix_meta, "cxx_compiler")
+        meta_cc = _meta_text(prefix_meta, "c_compiler_resolved") or _meta_text(prefix_meta, "c_compiler")
+        env_cxx = str(os.environ.get("RTLENS_CXX_COMPILER", "") or "").strip()
+        env_cc = str(os.environ.get("RTLENS_C_COMPILER", "") or "").strip()
+        if env_cxx or meta_cxx:
+            cxx = env_cxx or meta_cxx
+            args.append(f"-DCMAKE_CXX_COMPILER={cxx}")
+            info_parts.append(f"cxx={cxx}")
+        if env_cc or meta_cc:
+            cc = env_cc or meta_cc
+            args.append(f"-DCMAKE_C_COMPILER={cc}")
+            info_parts.append(f"cc={cc}")
+
         if os.name != "nt":
-            return [], ""
+            return args, (" " + " ".join(info_parts) if info_parts else "")
+
         generator = str(os.environ.get("RTLENS_CMAKE_GENERATOR", "") or "").strip()
-        c_compiler = str(os.environ.get("RTLENS_C_COMPILER", "") or "").strip()
-        cxx_compiler = str(os.environ.get("RTLENS_CXX_COMPILER", "") or "").strip()
+        c_compiler = env_cc
+        cxx_compiler = env_cxx
         make_program = str(os.environ.get("RTLENS_CMAKE_MAKE_PROGRAM", "") or "").strip()
         if not generator:
             auto_make = shutil.which("mingw32-make")
@@ -800,7 +828,6 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
                     "or set RTLENS_CMAKE_GENERATOR/RTLENS_CXX_COMPILER."
                 )
 
-        args: List[str] = []
         if generator:
             args.extend(["-G", generator])
         if c_compiler:
@@ -814,9 +841,11 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
             info += f" cxx={cxx_compiler}"
         if make_program:
             info += f" make={make_program}"
+        if info_parts:
+            info += " " + " ".join(info_parts)
         return args, info
 
-    windows_args, windows_info = _windows_toolchain_args()
+    toolchain_args, toolchain_info_extra = _toolchain_args()
     configure_cmd = [
         cmake,
         "-S",
@@ -826,7 +855,7 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_PREFIX_PATH={str(slang_prefix)}",
     ]
-    configure_cmd.extend(windows_args)
+    configure_cmd.extend(toolchain_args)
     configure = subprocess.run(
         configure_cmd,
         cwd=str(root),
@@ -849,9 +878,17 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
         text=True,
     )
     if build.returncode != 0:
+        detail = build.stderr or build.stdout
+        if "fmt::v12::vformat[abi:cxx11]" in detail:
+            detail += (
+                "\n\nhint: this looks like a macOS C++ ABI mismatch between a GCC-built "
+                "slang prefix and a clang/libc++ fmt library. Rebuild the slang prefix "
+                "with rtlens/tools/setup_slang_prefix.py so the private GCC-built fmt "
+                "prefix is recorded and reused for slang_dump."
+            )
         raise SlangBackendError(
             "failed to build slang_dump with standalone slang:\n"
-            f"{build.stderr or build.stdout}"
+            f"{detail}"
         )
 
     exe_names = ["slang_dump", "slang_dump.exe"]
@@ -874,7 +911,7 @@ set_target_properties(slang_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_B
         )
     shutil.copy2(str(built), str(out))
     os.chmod(str(out), 0o755)
-    return f"standalone slang prefix={slang_prefix}{windows_info} [{_CMAKELISTS_RECIPE_TAG}]"
+    return f"standalone slang prefix={slang_prefix}{toolchain_info_extra} [{_CMAKELISTS_RECIPE_TAG}]"
 
 
 def _ensure_tool() -> Tuple[Path, str]:

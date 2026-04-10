@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import string
 import sys
 from dataclasses import asdict, dataclass
@@ -74,6 +75,69 @@ def _check_pyside6() -> CheckResult:
             f"import failed: {e}",
             hint=f"install with `{_venv_python_hint()} -m pip install -e .`",
         )
+
+
+def _has_macos_hidden_flag(path: Path) -> bool:
+    try:
+        flags = getattr(path.lstat(), "st_flags", 0)
+    except OSError:
+        return False
+    return bool(flags & getattr(stat, "UF_HIDDEN", 0))
+
+
+def _check_pyside6_qpa_plugins(target_os: str, host_os: str) -> CheckResult:
+    if target_os != "mac":
+        return _ok("PySide6_qpa_plugins", False, "not applicable for target OS")
+
+    try:
+        import PySide6  # type: ignore
+        from PySide6.QtCore import QLibraryInfo  # type: ignore
+    except Exception as e:
+        return _warn(
+            "PySide6_qpa_plugins",
+            False,
+            f"PySide6 QtCore import failed: {e}",
+            hint=f"install with `{_venv_python_hint()} -m pip install -e .`",
+        )
+
+    try:
+        plugins_root = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))
+    except Exception:
+        plugins_root = Path(PySide6.__file__).resolve().parent / "Qt" / "plugins"
+
+    platforms_dir = plugins_root / "platforms"
+    cocoa = platforms_dir / "libqcocoa.dylib"
+    if not cocoa.is_file():
+        return _missing(
+            "PySide6_qpa_plugins",
+            False,
+            f"missing macOS Qt platform plugin: {cocoa}",
+            hint="reinstall PySide6 in the active venv",
+        )
+
+    if host_os != "mac":
+        return _warn(
+            "PySide6_qpa_plugins",
+            False,
+            f"target_os=mac, host_os={host_os}: hidden-flag check skipped; cocoa plugin exists at {cocoa}",
+            hint="run verify_install on macOS for a real Qt plugin visibility check",
+        )
+
+    hidden_paths = [p for p in (plugins_root, platforms_dir, cocoa) if _has_macos_hidden_flag(p)]
+    if hidden_paths:
+        detail = "macOS hidden flag present on: " + ", ".join(str(p) for p in hidden_paths)
+        return _warn(
+            "PySide6_qpa_plugins",
+            False,
+            detail,
+            hint=(
+                "run `.venv/bin/python rtlens/tools/macos_qt_plugin_fix.py --check` and, "
+                "if confirmed, `.venv/bin/python rtlens/tools/macos_qt_plugin_fix.py "
+                "--fix-hidden-flags --venv .venv`"
+            ),
+        )
+
+    return _ok("PySide6_qpa_plugins", False, f"cocoa plugin visible at {cocoa}")
 
 
 def _check_tkinter() -> CheckResult:
@@ -239,6 +303,38 @@ def _detect_svlang_lib(prefix: Path) -> Optional[Path]:
     return None
 
 
+def _read_slang_toolchain_meta(prefix: Path) -> dict:
+    meta = prefix / "share" / "rtlens" / "slang_toolchain_meta.json"
+    if not meta.is_file():
+        return {}
+    try:
+        parsed = json.loads(meta.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_cmake_cache_value(cache: Path, key: str) -> str:
+    if not cache.is_file():
+        return ""
+    prefix = f"{key}:"
+    try:
+        lines = cache.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        _name_type, _sep, value = line.partition("=")
+        return value.strip()
+    return ""
+
+
+def _looks_like_gnu_cxx(path_value: str) -> bool:
+    name = Path(str(path_value or "")).name.lower()
+    return name in {"g++", "gcc"} or name.startswith("g++-") or name.startswith("gcc-")
+
+
 def _check_slang_artifacts() -> CheckResult:
     for cand in _slang_prefix_candidates():
         missing: List[str] = []
@@ -264,6 +360,50 @@ def _check_slang_artifacts() -> CheckResult:
         True,
         "standalone slang install-prefix not found in candidates",
         hint="set `SVVIEW_SLANG_ROOT=/path/to/slang-prefix` or run `rtlens/tools/setup_slang_prefix.py`",
+    )
+
+
+def _check_macos_slang_fmt_abi(target_os: str) -> CheckResult:
+    if target_os != "mac":
+        return _ok("macos_slang_fmt_abi", False, "not applicable for target OS")
+    for cand in _slang_prefix_candidates():
+        if _detect_slang_config(cand) is None or _detect_svlang_lib(cand) is None:
+            continue
+        meta = _read_slang_toolchain_meta(cand)
+        cxx = str(
+            meta.get("cxx_compiler_resolved")
+            or meta.get("cxx_compiler")
+            or _read_cmake_cache_value(REPO / ".cache" / "slang-build" / "CMakeCache.txt", "CMAKE_CXX_COMPILER")
+            or ""
+        )
+        fmt_dir = str(
+            meta.get("fmt_dir")
+            or _read_cmake_cache_value(REPO / ".cache" / "slang-build" / "CMakeCache.txt", "fmt_DIR")
+            or ""
+        )
+        system_fmt = not fmt_dir or fmt_dir.startswith("/usr/local/lib/cmake/fmt")
+        if _looks_like_gnu_cxx(cxx) and system_fmt:
+            return _warn(
+                "macos_slang_fmt_abi",
+                False,
+                f"slang prefix appears to use GCC cxx={cxx or '(unknown)'} with system fmt_dir={fmt_dir or '(missing)'}",
+                hint=(
+                    "rebuild with `CC=/usr/local/opt/gcc/bin/gcc-15 CXX=/usr/local/opt/gcc/bin/g++-15 "
+                    ".venv/bin/python rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing "
+                    "--slang-ref v10.0 --checkout-ref`"
+                ),
+            )
+        detail = f"slang prefix={cand}"
+        if cxx:
+            detail += f" cxx={cxx}"
+        if fmt_dir:
+            detail += f" fmt_dir={fmt_dir}"
+        return _ok("macos_slang_fmt_abi", False, detail)
+    return _warn(
+        "macos_slang_fmt_abi",
+        False,
+        "slang prefix metadata unavailable",
+        hint="run setup_slang_prefix.py before GUI validation",
     )
 
 
@@ -335,10 +475,14 @@ def main() -> int:
     results.append(_check_venv())
     results.append(_check_python())
     results.append(_check_pyside6())
+    if target == "mac":
+        results.append(_check_pyside6_qpa_plugins(target, host))
     results.append(_check_tkinter())
     results.append(_check_cmd("cmake", True, hint="install cmake (required for standalone slang build path)"))
     results.append(_check_cmd("g++", True, hint="install g++/build-essential"))
     results.append(_check_slang_artifacts())
+    if target == "mac":
+        results.append(_check_macos_slang_fmt_abi(target))
     results.append(_check_cmd("yosys", True, hint=_yosys_hint(target)))
     results.append(_check_cmd("node", True, hint="install Node.js"))
     results.append(_check_cmd("npm", True, hint="install npm"))

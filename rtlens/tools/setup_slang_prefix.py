@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 _TOOLCHAIN_META_REL = Path("share/rtlens/slang_toolchain_meta.json")
+_FMT_VERSION = "12.1.0"
 
 
 def _resolve_path(value: str) -> Path:
@@ -45,6 +46,102 @@ def _resolve_executable(value: str) -> str:
     return str(p) if p.exists() else v
 
 
+def _read_cmake_cache_value(cache: Path, key: str) -> str:
+    if not cache.is_file():
+        return ""
+    prefix = f"{key}:"
+    try:
+        lines = cache.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        _name_type, _sep, value = line.partition("=")
+        return value.strip()
+    return ""
+
+
+def _looks_like_gnu_cxx(path_value: str) -> bool:
+    name = Path(str(path_value or "")).name.lower()
+    return name in {"g++", "gcc"} or name.startswith("g++-") or name.startswith("gcc-")
+
+
+def _detect_fmt_config(prefix: Path) -> Path | None:
+    for rel in (
+        Path("lib/cmake/fmt/fmt-config.cmake"),
+        Path("lib/cmake/fmt/fmtConfig.cmake"),
+        Path("lib64/cmake/fmt/fmt-config.cmake"),
+        Path("lib64/cmake/fmt/fmtConfig.cmake"),
+    ):
+        p = prefix / rel
+        if p.is_file():
+            return p.parent
+    return None
+
+
+def _build_private_fmt(
+    *,
+    args: argparse.Namespace,
+    cmake: str,
+    git: str,
+    c_compiler: str,
+    cxx_compiler: str,
+) -> Path:
+    fmt_source = _resolve_path(args.fmt_source)
+    fmt_build = _resolve_path(args.fmt_build_dir)
+    fmt_prefix = _resolve_path(args.fmt_prefix)
+    if args.clean and fmt_build.exists():
+        shutil.rmtree(fmt_build)
+    if not (fmt_source / "CMakeLists.txt").is_file():
+        if not git:
+            raise RuntimeError("git is required to clone private fmt but was not found on PATH")
+        fmt_source.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                git,
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                _FMT_VERSION,
+                "https://github.com/fmtlib/fmt.git",
+                str(fmt_source),
+            ],
+            REPO,
+        )
+
+    fmt_build.mkdir(parents=True, exist_ok=True)
+    fmt_prefix.mkdir(parents=True, exist_ok=True)
+    configure_cmd = [
+        cmake,
+        "-S",
+        str(fmt_source),
+        "-B",
+        str(fmt_build),
+        "-DCMAKE_BUILD_TYPE=Release",
+        f"-DCMAKE_INSTALL_PREFIX={fmt_prefix}",
+        "-DFMT_DOC=OFF",
+        "-DFMT_TEST=OFF",
+        "-DBUILD_SHARED_LIBS=OFF",
+    ]
+    if c_compiler:
+        configure_cmd.append(f"-DCMAKE_C_COMPILER={c_compiler}")
+    if cxx_compiler:
+        configure_cmd.append(f"-DCMAKE_CXX_COMPILER={cxx_compiler}")
+    if args.cmake_generator:
+        configure_cmd.extend(["-G", args.cmake_generator])
+    if args.make_program:
+        configure_cmd.append(f"-DCMAKE_MAKE_PROGRAM={args.make_program}")
+    _run(configure_cmd, REPO)
+    _run([cmake, "--build", str(fmt_build), "--config", "Release", "--parallel", str(args.jobs)], REPO)
+    _run([cmake, "--install", str(fmt_build), "--config", "Release"], REPO)
+    fmt_dir = _detect_fmt_config(fmt_prefix)
+    if fmt_dir is None:
+        raise RuntimeError(f"private fmt build completed but fmt config was not found under {fmt_prefix}")
+    return fmt_dir
+
+
 def _write_toolchain_meta(
     *,
     prefix: Path,
@@ -55,6 +152,8 @@ def _write_toolchain_meta(
     cxx_compiler: str,
     make_program: str,
     slang_src: Path,
+    build_dir: Path,
+    fmt_dir: str,
 ) -> Path:
     """Write standalone slang toolchain metadata under install prefix."""
     out = prefix / _TOOLCHAIN_META_REL
@@ -73,6 +172,9 @@ def _write_toolchain_meta(
         "cxx_compiler": _resolve_executable(cxx_compiler),
         "make_program": _resolve_executable(make_program),
         "cmake_cmd": _norm_text(args.cmake_cmd),
+        "c_compiler_resolved": _read_cmake_cache_value(build_dir / "CMakeCache.txt", "CMAKE_C_COMPILER"),
+        "cxx_compiler_resolved": _read_cmake_cache_value(build_dir / "CMakeCache.txt", "CMAKE_CXX_COMPILER"),
+        "fmt_dir": _norm_text(fmt_dir),
     }
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return out
@@ -131,6 +233,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--build-type", default="Release", help="cmake build type")
     p.add_argument("--jobs", type=int, default=max(1, os.cpu_count() or 1), help="parallel build jobs")
     p.add_argument("--clean", action="store_true", help="remove build dir before configure")
+    p.add_argument("--fmt-dir", default="", help="fmt CMake config directory override passed as -Dfmt_DIR")
+    p.add_argument("--fmt-source", default=".cache/fmt-src", help="private fmt source directory for macOS GCC builds")
+    p.add_argument("--fmt-build-dir", default=".cache/fmt-build", help="private fmt build directory for macOS GCC builds")
+    p.add_argument("--fmt-prefix", default=".deps/fmt-gcc", help="private fmt install prefix for macOS GCC builds")
     return p.parse_args()
 
 
@@ -205,6 +311,11 @@ def main() -> int:
     c_compiler = str(args.c_compiler or "").strip()
     cxx_compiler = str(args.cxx_compiler or "").strip()
     make_program = str(args.make_program or "").strip()
+    env_cc = str(os.environ.get("CC", "") or "").strip()
+    env_cxx = str(os.environ.get("CXX", "") or "").strip()
+    effective_cc = c_compiler or env_cc
+    effective_cxx = cxx_compiler or env_cxx
+    fmt_dir = str(args.fmt_dir or "").strip()
     if os.name == "nt" and not generator:
         auto_make = shutil.which("mingw32-make")
         auto_ninja = shutil.which("ninja")
@@ -228,6 +339,22 @@ def main() -> int:
             print("        or provide --cmake-generator / compiler overrides explicitly.")
             return 2
 
+    if sys.platform == "darwin" and _looks_like_gnu_cxx(effective_cxx) and not fmt_dir:
+        try:
+            fmt_dir = str(
+                _build_private_fmt(
+                    args=args,
+                    cmake=cmake,
+                    git=git or "",
+                    c_compiler=effective_cc,
+                    cxx_compiler=effective_cxx,
+                )
+            )
+            print(f"[INFO] using private fmt for macOS GCC build: {fmt_dir}")
+        except RuntimeError as e:
+            print(f"[ERROR] failed to prepare private fmt for macOS GCC build: {e}")
+            return 1
+
     configure_cmd = [
         cmake,
         "-S",
@@ -242,6 +369,8 @@ def main() -> int:
         "-DSLANG_INCLUDE_PYLIB=OFF",
         "-DSLANG_INCLUDE_INSTALL=ON",
     ]
+    if fmt_dir:
+        configure_cmd.append(f"-Dfmt_DIR={fmt_dir}")
     if generator:
         configure_cmd.extend(["-G", generator])
     if c_compiler:
@@ -276,6 +405,8 @@ def main() -> int:
         cxx_compiler=cxx_compiler,
         make_program=make_program,
         slang_src=slang_src,
+        build_dir=build_dir,
+        fmt_dir=fmt_dir,
     )
 
     print("\n[OK] standalone slang prefix is ready")
