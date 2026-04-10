@@ -11,6 +11,24 @@ A desktop viewer for SystemVerilog designs — source, hierarchy, signal connect
 - **Schematic view** — RTL block diagram via yosys + netlistsvg (ELK layout)
 - **Platform-aware workflow** — Linux primary support, Windows best-effort, macOS reference flow
 
+## Screenshots
+
+**Source view** — syntax-highlighted SystemVerilog with signal driver/load search
+
+![Source view](screenshots/sourceview.png)
+
+**Schematic view** — RTL block diagram via yosys + netlistsvg
+
+![Schematic view](screenshots/schematic.png)
+
+**RTL Structure** — hierarchy visualization
+
+![RTL Structure](screenshots/rtlstructure.png)
+
+**Waveform** — GTKwave integration via wave bridge
+
+![Waveform](screenshots/waveform.png)
+
 ## Requirements
 
 | Requirement | Notes |
