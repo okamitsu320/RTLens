@@ -243,6 +243,15 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 
 cd third_party/elk && npm ci && cd ../..
+
+# Step 1: find installed Homebrew GCC version (number may change with future Homebrew updates)
+ls $(brew --prefix gcc)/bin/g++-*
+# e.g. output: .../g++-15
+
+# Step 2: set CXX/CC (adjust version number as shown above)
+export CXX=$(brew --prefix gcc)/bin/g++-15
+export CC=$(brew --prefix gcc)/bin/gcc-15
+
 python3 rtlens/tools/setup_slang_prefix.py --clean --clone-if-missing --slang-ref v10.0 --checkout-ref
 .venv/bin/python rtlens/tools/verify_install.py --target-os mac
 ```
