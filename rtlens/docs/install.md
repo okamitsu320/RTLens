@@ -251,33 +251,8 @@ Known limitations and environment notes:
 
 - Monterey 12.x can fail during slang build (`<source_location>` / toolchain issues).
 - `gcc` on macOS resolves to Apple Clang, which has incomplete C++ standard library
-  support (`<bit>`, `<any>`, `<array>` etc. may not be found). This can also be
-  caused by a broken Command Line Tools SDK path.
-  Before switching compilers, verify that Apple Clang itself can compile C++20
-  headers:
-
-  ```bash
-  echo '#include <bit>
-  #include <any>
-  int main(){}' | clang++ -std=c++20 -x c++ -
-  ```
-
-  If this fails, reinstall Command Line Tools:
-
-  ```bash
-  sudo rm -rf /Library/Developer/CommandLineTools
-  xcode-select --install
-  ```
-
-  If you have Xcode.app installed, switch to it instead:
-
-  ```bash
-  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-  ```
-
-  If Apple Clang still cannot find `<bit>` after reinstalling, use Homebrew GCC:
-
-- **Fix**: use Homebrew GCC (real GCC, installed as `gcc-15` or similar).
+  support (`<bit>`, `<any>`, `<array>` etc. may not be found). **Always use
+  Homebrew GCC** for the slang build; Apple Clang is not supported.
   `brew --prefix gcc` resolves correctly on both Intel (`/usr/local/opt/gcc`)
   and Apple Silicon (`/opt/homebrew/opt/gcc`) Macs.
 
