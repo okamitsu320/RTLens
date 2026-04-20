@@ -105,6 +105,39 @@ Requires `node`, `npm`, and Graphviz (`dot`) in the current setup.
 - Opens `.vcd` and `.fst` (when conversion tools are available).
 - Open External wave scope is: `surfer`, `gtkwave`, `off`.
 
+## Qt shortcuts
+
+The Qt UI supports configurable reload shortcuts.
+
+Default shortcuts:
+
+- `Reload RTL`: `Ctrl+R`
+- `Reload All`: `Ctrl+Shift+R`
+- `Reload Wave`: `Ctrl+Shift+W`
+
+Shortcut config file:
+
+- Default path: `~/.config/rtlens/shortcuts_qt.json`
+- If `XDG_CONFIG_HOME` is set, the path is `${XDG_CONFIG_HOME}/rtlens/shortcuts_qt.json`
+
+Example:
+
+```json
+{
+  "reload_rtl": ["Ctrl+R"],
+  "reload_all": ["Ctrl+Shift+R", "F5"],
+  "reload_wave": ["Ctrl+Shift+W"]
+}
+```
+
+Notes:
+
+- You can specify one string or a list of strings for each action.
+- Set an action to `[]` to disable its shortcut.
+- Invalid key strings are ignored and reported in the status area.
+- Shortcut names follow `QKeySequence` notation (for example `Ctrl+R`, `F5`).
+- Restart RTLens after editing `shortcuts_qt.json`.
+
 ## Known limitations
 
 - Verified regression inputs are primarily the bundled `RTL/verification/*` cases.
