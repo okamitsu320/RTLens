@@ -1912,10 +1912,7 @@ class SvViewQtWindow(QMainWindow):
                 self._qt_shortcut_notes.append(f"ignored empty sequence: {text!r}")
                 continue
             for i in range(count):
-                try:
-                    code = int(seq[i])
-                except Exception:
-                    code = 0
+                code = self._keyseq_item_to_int(seq[i])
                 if code and code not in out:
                     out.append(code)
         return out
@@ -1956,7 +1953,13 @@ class SvViewQtWindow(QMainWindow):
             return 0
         mods = self._enum_to_int(event.modifiers()) if hasattr(event, "modifiers") else 0
         key = self._enum_to_int(event.key())
-        return int(QKeySequence(mods | key)[0])
+        try:
+            seq = QKeySequence(mods | key)
+            if hasattr(seq, "count") and int(seq.count()) > 0:
+                return self._keyseq_item_to_int(seq[0])
+        except Exception:
+            pass
+        return 0
 
     def _enum_to_int(self, value) -> int:
         try:
@@ -1967,6 +1970,18 @@ class SvViewQtWindow(QMainWindow):
         if raw is not None:
             try:
                 return int(raw)
+            except Exception:
+                pass
+        return 0
+
+    def _keyseq_item_to_int(self, value) -> int:
+        code = self._enum_to_int(value)
+        if code:
+            return code
+        to_combined = getattr(value, "toCombined", None)
+        if callable(to_combined):
+            try:
+                return int(to_combined())
             except Exception:
                 pass
         return 0
