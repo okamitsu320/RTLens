@@ -500,6 +500,14 @@ class SvViewApp:
             vals = [x for x in raw if x]
         return [os.path.abspath(x) for x in vals]
 
+    def _arg_rtl_files(self) -> List[str]:
+        raw = getattr(self.args, "rtl_file", [])
+        if isinstance(raw, str):
+            vals = [raw] if raw else []
+        else:
+            vals = [x for x in raw if x]
+        return [os.path.abspath(x) for x in vals]
+
     def _read_multiple_filelists(self, paths: List[str]) -> Tuple[List[str], List[str]]:
         all_files: List[str] = []
         all_args: List[str] = []
@@ -2014,6 +2022,14 @@ class SvViewApp:
                 files, slang_args = self._read_multiple_filelists(arg_filelists)
                 self._parse_files(files, slang_args)
                 reloaded = True
+            else:
+                arg_rtl_files = [p for p in self._arg_rtl_files() if os.path.isfile(p)]
+                if arg_rtl_files:
+                    self.loaded_filelist_paths = []
+                    self.loaded_filelist_path = ""
+                    self.loaded_dir_path = ""
+                    self._parse_files(arg_rtl_files, [])
+                    reloaded = True
         if reloaded:
             self.clear_trace_log()
             self.set_status("RTL reloaded")
@@ -2051,17 +2067,26 @@ class SvViewApp:
 
     def run(self) -> None:
         arg_filelists = self._arg_filelists()
+        arg_rtl_files = self._arg_rtl_files()
         valid_filelists = [p for p in arg_filelists if os.path.isfile(p)]
+        valid_rtl_files = [p for p in arg_rtl_files if os.path.isfile(p)]
         if valid_filelists:
             self.loaded_filelist_paths = valid_filelists
             self.loaded_filelist_path = valid_filelists[0]
             files, slang_args = self._read_multiple_filelists(valid_filelists)
             self._parse_files(files, slang_args)
+        elif valid_rtl_files:
+            self.loaded_filelist_paths = []
+            self.loaded_filelist_path = ""
+            self.loaded_dir_path = ""
+            self._parse_files(valid_rtl_files, [])
         elif self.args.dir and os.path.isdir(self.args.dir):
             self.loaded_dir_path = self.args.dir
             self._parse_files(discover_sv_files(self.args.dir), [])
         elif arg_filelists:
             self.set_status(f"filelist not found: {arg_filelists[0]}")
+        elif arg_rtl_files:
+            self.set_status(f"rtl-file not found: {arg_rtl_files[0]}")
 
         if self.args.wave and os.path.isfile(self.args.wave):
             self.loaded_wave_path = self.args.wave
