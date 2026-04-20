@@ -77,6 +77,15 @@ class TestParseCounter:
         ff = next(b for b in self.mod.always_blocks if b.kind == "always_ff")
         assert "rst_n" in ff.reset_signals
 
+    def test_always_ff_sensitivity_signals(self):
+        ff = next(b for b in self.mod.always_blocks if b.kind == "always_ff")
+        assert "clk" in ff.sensitivity_signals
+        assert "rst_n" in ff.sensitivity_signals
+
+    def test_always_ff_reads_exclude_event_control_clock(self):
+        ff = next(b for b in self.mod.always_blocks if b.kind == "always_ff")
+        assert "clk" not in ff.reads
+
 
 # ---------------------------------------------------------------------------
 # hierarchy.sv

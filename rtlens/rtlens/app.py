@@ -186,6 +186,12 @@ class SvViewApp:
         ).pack(
             anchor=tk.W, padx=4, pady=2
         )
+        self.include_clock_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            sig_right, text="Include clock deps", variable=self.include_clock_var, command=self.search_signal_if_any
+        ).pack(
+            anchor=tk.W, padx=4, pady=2
+        )
         self.include_port_sites_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             sig_right, text="Include port sites", variable=self.include_port_sites_var, command=self.search_signal_if_any
@@ -466,6 +472,7 @@ class SvViewApp:
             self.signal_entry.delete(0, tk.END)
             self.signal_entry.insert(0, sig)
             self.include_control_var.set(bool(action.get("include_control", False)))
+            self.include_clock_var.set(bool(action.get("include_clock", True)))
             self.include_port_sites_var.set(bool(action.get("include_ports", False)))
             self.search_signal()
             return
@@ -487,6 +494,14 @@ class SvViewApp:
 
     def _arg_filelists(self) -> List[str]:
         raw = getattr(self.args, "filelist", [])
+        if isinstance(raw, str):
+            vals = [raw] if raw else []
+        else:
+            vals = [x for x in raw if x]
+        return [os.path.abspath(x) for x in vals]
+
+    def _arg_rtl_files(self) -> List[str]:
+        raw = getattr(self.args, "rtl_file", [])
         if isinstance(raw, str):
             vals = [raw] if raw else []
         else:
@@ -1176,14 +1191,25 @@ class SvViewApp:
         self._follow_hierarchy_for_signal(q)
 
         include_control = bool(self.include_control_var.get())
+        include_clock = bool(self.include_clock_var.get())
         include_ports = bool(self.include_port_sites_var.get())
         drivers, loads = query_signal(
-            self.connectivity, q, recursive=False, include_control=include_control, include_ports=include_ports
+            self.connectivity,
+            q,
+            recursive=False,
+            include_control=include_control,
+            include_clock=include_clock,
+            include_ports=include_ports,
         )
         port_hint = ""
         if (not include_ports) and (not drivers) and (not loads):
             port_drivers, port_loads = query_signal(
-                self.connectivity, q, recursive=False, include_control=include_control, include_ports=True
+                self.connectivity,
+                q,
+                recursive=False,
+                include_control=include_control,
+                include_clock=include_clock,
+                include_ports=True,
             )
             if port_drivers or port_loads:
                 port_hint = " | hint: enable 'Include port sites'"
@@ -1196,14 +1222,16 @@ class SvViewApp:
             self.load_list.insert(tk.END, f"{sig} -> {loc.file}:{loc.line}")
 
         ctrl = "with-control" if include_control else "data-only"
+        clk = "with-clock" if include_clock else "no-clock"
         ports = "with-ports" if include_ports else "no-ports"
-        self.set_status(f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {ports}){port_hint}")
+        self.set_status(f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {clk}, {ports}){port_hint}")
         self._append_trace(
-            f"trace {q} ({ctrl}, {ports})",
+            f"trace {q} ({ctrl}, {clk}, {ports})",
             {
                 "type": "signal-trace",
                 "signal": q,
                 "include_control": include_control,
+                "include_clock": include_clock,
                 "include_ports": include_ports,
             },
         )
@@ -1994,6 +2022,14 @@ class SvViewApp:
                 files, slang_args = self._read_multiple_filelists(arg_filelists)
                 self._parse_files(files, slang_args)
                 reloaded = True
+            else:
+                arg_rtl_files = [p for p in self._arg_rtl_files() if os.path.isfile(p)]
+                if arg_rtl_files:
+                    self.loaded_filelist_paths = []
+                    self.loaded_filelist_path = ""
+                    self.loaded_dir_path = ""
+                    self._parse_files(arg_rtl_files, [])
+                    reloaded = True
         if reloaded:
             self.clear_trace_log()
             self.set_status("RTL reloaded")
@@ -2031,17 +2067,26 @@ class SvViewApp:
 
     def run(self) -> None:
         arg_filelists = self._arg_filelists()
+        arg_rtl_files = self._arg_rtl_files()
         valid_filelists = [p for p in arg_filelists if os.path.isfile(p)]
+        valid_rtl_files = [p for p in arg_rtl_files if os.path.isfile(p)]
         if valid_filelists:
             self.loaded_filelist_paths = valid_filelists
             self.loaded_filelist_path = valid_filelists[0]
             files, slang_args = self._read_multiple_filelists(valid_filelists)
             self._parse_files(files, slang_args)
+        elif valid_rtl_files:
+            self.loaded_filelist_paths = []
+            self.loaded_filelist_path = ""
+            self.loaded_dir_path = ""
+            self._parse_files(valid_rtl_files, [])
         elif self.args.dir and os.path.isdir(self.args.dir):
             self.loaded_dir_path = self.args.dir
             self._parse_files(discover_sv_files(self.args.dir), [])
         elif arg_filelists:
             self.set_status(f"filelist not found: {arg_filelists[0]}")
+        elif arg_rtl_files:
+            self.set_status(f"rtl-file not found: {arg_rtl_files[0]}")
 
         if self.args.wave and os.path.isfile(self.args.wave):
             self.loaded_wave_path = self.args.wave

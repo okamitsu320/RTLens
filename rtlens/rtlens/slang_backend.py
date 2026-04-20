@@ -41,7 +41,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from .connectivity import build_hierarchy
 from .model import ConnectivityDB, DesignDB, HierNode, SourceLoc
+from .sv_parser import parse_sv_files
 
 
 class SlangBackendError(RuntimeError):
@@ -954,6 +956,124 @@ def _hier_parent(path: str) -> Optional[str]:
     return path[:p]
 
 
+def _extract_defined_macros_from_args(args: Sequence[str]) -> Set[str]:
+    """Extract ``+define+`` / ``-D`` macro names from slang argument tokens."""
+    out: Set[str] = set()
+    items = [str(x or "") for x in args]
+    i = 0
+    while i < len(items):
+        tok = items[i]
+        if tok.startswith("+define+"):
+            for d in tok.split("+")[2:]:
+                key = d.split("=", 1)[0].strip()
+                if key:
+                    out.add(key)
+        elif tok == "-D" and i + 1 < len(items):
+            key = items[i + 1].split("=", 1)[0].strip()
+            if key:
+                out.add(key)
+            i += 1
+        elif tok.startswith("-D") and len(tok) > 2:
+            key = tok[2:].split("=", 1)[0].strip()
+            if key:
+                out.add(key)
+        i += 1
+    return out
+
+
+def _normalize_clock_dependencies_with_parser(
+    cdb: ConnectivityDB,
+    *,
+    files: Sequence[str],
+    top: str,
+    extra_args: Sequence[str],
+    log_lines: List[str],
+) -> None:
+    """Normalize clock dependencies using parser always-block metadata.
+
+    Purpose:
+    - remove event-control sensitivity signals from *data* dependencies
+    - re-add clock sensitivity signals as dedicated *clock* dependencies
+    """
+    try:
+        defined = _extract_defined_macros_from_args(extra_args)
+        parsed = parse_sv_files(files, defined_macros=defined)
+        build_hierarchy(parsed, top if top else None)
+    except Exception as e:
+        log_lines.append(f"clock normalize skipped: parser side-load failed: {e}")
+        return
+
+    removed_data_edges = 0
+    removed_data_loads = 0
+    added_clock_edges = 0
+    added_clock_loads = 0
+
+    for path, node in parsed.hier.items():
+        mod = parsed.modules.get(node.module_name)
+        if not mod:
+            continue
+        mod_file = os.path.abspath(str(mod.file or ""))
+        for blk in getattr(mod, "always_blocks", []):
+            if not getattr(blk, "writes", None):
+                continue
+            line = int(getattr(blk, "line_start", 0) or 0)
+            if line <= 0:
+                continue
+            write_abs = [f"{path}.{w}" for w in (blk.writes or []) if w]
+            if not write_abs:
+                continue
+
+            sensitivity = set(getattr(blk, "sensitivity_signals", []) or [])
+            body_reads = set(getattr(blk, "reads", []) or [])
+            sensitivity_only = [sig for sig in sensitivity if sig and sig not in body_reads]
+
+            for sig in sensitivity_only:
+                sig_abs = f"{path}.{sig}"
+                data_sites = cdb.load_sites_data.get(sig_abs, [])
+                if data_sites:
+                    kept: List[SourceLoc] = []
+                    for loc in data_sites:
+                        same_file = os.path.abspath(str(loc.file or "")) == mod_file
+                        same_line = int(getattr(loc, "line", 0) or 0) == line
+                        if same_file and same_line:
+                            removed_data_loads += 1
+                            continue
+                        kept.append(loc)
+                    if kept:
+                        cdb.load_sites_data[sig_abs] = kept
+                    else:
+                        cdb.load_sites_data.pop(sig_abs, None)
+
+                dsts = cdb.drives_data.get(sig_abs)
+                if dsts:
+                    before = len(dsts)
+                    for w_abs in write_abs:
+                        dsts.discard(w_abs)
+                    removed_data_edges += max(0, before - len(dsts))
+
+            for clk in (blk.clock_signals or []):
+                if not clk:
+                    continue
+                clk_abs = f"{path}.{clk}"
+                clk_loc = SourceLoc(file=mod.file, line=line)
+                cdb.signal_to_source.setdefault(clk_abs, clk_loc)
+                cdb.add_load_site(clk_abs, clk_loc, kind="clock")
+                added_clock_loads += 1
+                before = len(cdb.drives_clock.get(clk_abs, set()))
+                for w_abs in write_abs:
+                    cdb.add_edge(clk_abs, w_abs, kind="clock")
+                added_clock_edges += max(0, len(cdb.drives_clock.get(clk_abs, set())) - before)
+
+    if any((removed_data_edges, removed_data_loads, added_clock_edges, added_clock_loads)):
+        log_lines.append(
+            "clock normalize: "
+            f"removed_data_edges={removed_data_edges} "
+            f"removed_data_loads={removed_data_loads} "
+            f"added_clock_edges={added_clock_edges} "
+            f"added_clock_loads={added_clock_loads}"
+        )
+
+
 def load_design_with_slang(
     files: Iterable[str], top: str = "", extra_args: Optional[List[str]] = None
 ) -> Tuple[DesignDB, ConnectivityDB, str]:
@@ -1161,6 +1281,7 @@ def load_design_with_slang(
             cdb.signal_to_source[sig] = SourceLoc(file=file, line=line)
             cdb.drives_data.setdefault(sig, set())
             cdb.drives_control.setdefault(sig, set())
+            cdb.drives_clock.setdefault(sig, set())
         elif tag in {"D", "DP", "LD", "LP", "LC"} and len(parts) >= 4:
             sig = _unesc(parts[1])
             file = _unesc(parts[2])
@@ -1181,6 +1302,7 @@ def load_design_with_slang(
             cdb.signal_to_source.setdefault(sig, loc)
             cdb.drives_data.setdefault(sig, set())
             cdb.drives_control.setdefault(sig, set())
+            cdb.drives_clock.setdefault(sig, set())
         elif tag in {"E", "ED", "EC", "EP"} and len(parts) >= 5:
             src = _unesc(parts[1])
             dst = _unesc(parts[2])
@@ -1291,6 +1413,14 @@ def load_design_with_slang(
         db.callable_ref_sites[k] = sorted(set(vals))
     for k, vals in list(db.callable_def_sites.items()):
         db.callable_def_sites[k] = sorted(set(vals))
+
+    _normalize_clock_dependencies_with_parser(
+        cdb,
+        files=abs_files,
+        top=top,
+        extra_args=normalized_extra,
+        log_lines=log_lines,
+    )
 
     log_lines.append("tag counts:")
     for k in sorted(tag_counts.keys()):

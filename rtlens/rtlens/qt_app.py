@@ -64,7 +64,7 @@ from .wave_bridge import WaveBridgeError, create_wave_bridge
 
 try:
     from PySide6.QtCore import QByteArray, QObject, QPointF, QTimer, Qt, QUrl, Slot
-    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF
+    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
         QAbstractScrollArea,
@@ -150,6 +150,7 @@ except ModuleNotFoundError:
     QMenu = object
     QSvgRenderer = object
     QScrollArea = object
+    QKeySequence = object
 
 SV_KEYWORDS = {
     "module",
@@ -201,6 +202,12 @@ SV_TYPE_KEYWORDS = {
     "localparam",
     "parameter",
     "genvar",
+}
+
+DEFAULT_QT_SHORTCUTS = {
+    "reload_rtl": ["Ctrl+R"],
+    "reload_all": ["Ctrl+Shift+R"],
+    "reload_wave": ["Ctrl+Shift+W"],
 }
 
 
@@ -352,6 +359,8 @@ class SvViewQtWindow(QMainWindow):
         self.wave: Optional[WaveDB] = None
         self.wave_signals: List[str] = []
         self.trace_actions: List[dict] = []
+        self.qt_shortcuts: dict[str, list[int]] = {}
+        self._qt_shortcut_notes: List[str] = []
         self.nav_history: List[tuple[str, int]] = []
         self.nav_index: int = -1
         self.recent_locs: List[tuple[str, int]] = []
@@ -476,6 +485,9 @@ class SvViewQtWindow(QMainWindow):
         self.hier_to_path: dict[int, str] = {}
         self.hier_path_to_item: dict[str, QTreeWidgetItem] = {}
         self._suppress_hier_select: bool = False
+        self.qt_shortcuts = self._load_qt_shortcuts()
+        if self._qt_shortcut_notes:
+            self.compile_log += "\n\n[svview] qt shortcut config\n" + "\n".join(self._qt_shortcut_notes)
         self._build_ui()
         self._apply_theme()
         self._start_wave_event_timer()
@@ -552,6 +564,10 @@ class SvViewQtWindow(QMainWindow):
         self.include_control_check = QCheckBox("Include control deps")
         self.include_control_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
         opt_row.addWidget(self.include_control_check)
+        self.include_clock_check = QCheckBox("Include clock deps")
+        self.include_clock_check.setChecked(True)
+        self.include_clock_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
+        opt_row.addWidget(self.include_clock_check)
         self.include_ports_check = QCheckBox("Include port sites")
         self.include_ports_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
         opt_row.addWidget(self.include_ports_check)
@@ -1727,11 +1743,16 @@ class SvViewQtWindow(QMainWindow):
             sess = self._load_session()
             self._restore_session_lists(sess)
             arg_filelists = self._arg_filelists()
-            filelists = arg_filelists or [os.path.abspath(x) for x in sess.get("filelists", []) if x]
-            valid_filelists = [p for p in filelists if os.path.isfile(p)]
+            arg_rtl_files = self._arg_rtl_files()
+            valid_arg_filelists = [p for p in arg_filelists if os.path.isfile(p)]
+            valid_arg_rtl_files = [p for p in arg_rtl_files if os.path.isfile(p)]
+            cli_dir = os.path.abspath(self.args.dir) if self.args.dir else ""
+            has_cli_inputs = bool(arg_filelists or arg_rtl_files or cli_dir)
+            sess_filelists = [os.path.abspath(x) for x in sess.get("filelists", []) if x]
+            valid_sess_filelists = [p for p in sess_filelists if os.path.isfile(p)]
             rtl_dir = (
-                os.path.abspath(self.args.dir)
-                if self.args.dir
+                cli_dir
+                if cli_dir
                 else os.path.abspath(sess.get("dir", "")) if sess.get("dir", "") else ""
             )
             wave = (
@@ -1739,24 +1760,51 @@ class SvViewQtWindow(QMainWindow):
                 if getattr(self.args, "wave", "")
                 else os.path.abspath(sess.get("wave", "")) if sess.get("wave", "") else ""
             )
-            if valid_filelists:
-                self.loaded_filelist_paths = valid_filelists
-                self.loaded_filelist_path = valid_filelists[0]
-                files, slang_args = self._read_multiple_filelists(valid_filelists)
-                self._parse_files(files, slang_args)
-            elif rtl_dir and os.path.isdir(rtl_dir):
-                self.loaded_dir_path = rtl_dir
-                self._parse_files(discover_sv_files(rtl_dir), [])
-            elif filelists:
-                self.set_status(f"filelist not found: {filelists[0]}")
-            elif rtl_dir:
-                self.set_status(f"dir not found: {rtl_dir}")
+            if has_cli_inputs:
+                if valid_arg_filelists:
+                    self.loaded_filelist_paths = valid_arg_filelists
+                    self.loaded_filelist_path = valid_arg_filelists[0]
+                    self.loaded_dir_path = ""
+                    files, slang_args = self._read_multiple_filelists(valid_arg_filelists)
+                    self._parse_files(files, slang_args)
+                elif arg_filelists:
+                    self.set_status(f"filelist not found: {arg_filelists[0]}")
+                elif valid_arg_rtl_files:
+                    self.loaded_filelist_paths = []
+                    self.loaded_filelist_path = ""
+                    self.loaded_dir_path = ""
+                    self._parse_files(valid_arg_rtl_files, [])
+                elif arg_rtl_files:
+                    self.set_status(f"rtl-file not found: {arg_rtl_files[0]}")
+                elif cli_dir and os.path.isdir(cli_dir):
+                    self.loaded_dir_path = cli_dir
+                    self.loaded_filelist_paths = []
+                    self.loaded_filelist_path = ""
+                    self._parse_files(discover_sv_files(cli_dir), [])
+                elif cli_dir:
+                    self.set_status(f"dir not found: {cli_dir}")
+            else:
+                if valid_sess_filelists:
+                    self.loaded_filelist_paths = valid_sess_filelists
+                    self.loaded_filelist_path = valid_sess_filelists[0]
+                    self.loaded_dir_path = ""
+                    files, slang_args = self._read_multiple_filelists(valid_sess_filelists)
+                    self._parse_files(files, slang_args)
+                elif rtl_dir and os.path.isdir(rtl_dir):
+                    self.loaded_dir_path = rtl_dir
+                    self.loaded_filelist_paths = []
+                    self.loaded_filelist_path = ""
+                    self._parse_files(discover_sv_files(rtl_dir), [])
+                elif sess_filelists:
+                    self.set_status(f"filelist not found: {sess_filelists[0]}")
+                elif rtl_dir:
+                    self.set_status(f"dir not found: {rtl_dir}")
             if wave and os.path.isfile(wave):
                 self.loaded_wave_path = wave
                 self.load_wave_file(wave)
             cfile = os.path.abspath(sess.get("current_file", "")) if sess.get("current_file") else ""
             cline = int(sess.get("current_line", 1)) if str(sess.get("current_line", "")).strip() else 1
-            if cfile and os.path.isfile(cfile):
+            if (not has_cli_inputs) and cfile and os.path.isfile(cfile):
                 self.show_file(cfile, cline)
             if self.schematic_prebuild_last_summary:
                 self.set_status(self.schematic_prebuild_last_summary)
@@ -1829,6 +1877,135 @@ class SvViewQtWindow(QMainWindow):
     def _session_path(self) -> Path:
         cfg = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
         return cfg / "rtlens" / "session_qt.json"
+
+    def _shortcut_config_path(self) -> Path:
+        cfg = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
+        return cfg / "rtlens" / "shortcuts_qt.json"
+
+    def _parse_qt_shortcut_values(self, value: object) -> List[str]:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            return [text]
+        if isinstance(value, list):
+            out: List[str] = []
+            for it in value:
+                if not isinstance(it, str):
+                    continue
+                text = it.strip()
+                if text:
+                    out.append(text)
+            return out
+        return []
+
+    def _shortcut_values_to_keyseq_ints(self, values: List[str]) -> List[int]:
+        out: List[int] = []
+        for text in values:
+            try:
+                seq = QKeySequence(text)
+            except Exception:
+                self._qt_shortcut_notes.append(f"invalid sequence syntax: {text!r}")
+                continue
+            count = int(seq.count()) if hasattr(seq, "count") else 0
+            if count <= 0:
+                self._qt_shortcut_notes.append(f"ignored empty sequence: {text!r}")
+                continue
+            for i in range(count):
+                code = self._keyseq_item_to_int(seq[i])
+                if code and code not in out:
+                    out.append(code)
+        return out
+
+    def _load_qt_shortcuts(self) -> dict[str, list[int]]:
+        out: dict[str, list[int]] = {}
+        self._qt_shortcut_notes = []
+        for action, values in DEFAULT_QT_SHORTCUTS.items():
+            out[action] = self._shortcut_values_to_keyseq_ints(list(values))
+        path = self._shortcut_config_path()
+        if not path.is_file():
+            return out
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self._qt_shortcut_notes.append(f"failed to read {path}: {e}")
+            return out
+        if not isinstance(data, dict):
+            self._qt_shortcut_notes.append(f"ignored {path}: top-level JSON must be an object")
+            return out
+        for action in DEFAULT_QT_SHORTCUTS.keys():
+            if action not in data:
+                continue
+            seq_values = self._parse_qt_shortcut_values(data.get(action))
+            if not seq_values:
+                out[action] = []
+                self._qt_shortcut_notes.append(f"{action}: disabled by config")
+                continue
+            parsed = self._shortcut_values_to_keyseq_ints(seq_values)
+            if parsed:
+                out[action] = parsed
+            else:
+                self._qt_shortcut_notes.append(f"{action}: no valid shortcuts found in config")
+        return out
+
+    def _shortcut_combo_for_event(self, event) -> int:
+        if Qt is object or not hasattr(event, "key"):
+            return 0
+        mods = self._enum_to_int(event.modifiers()) if hasattr(event, "modifiers") else 0
+        key = self._enum_to_int(event.key())
+        try:
+            seq = QKeySequence(mods | key)
+            if hasattr(seq, "count") and int(seq.count()) > 0:
+                return self._keyseq_item_to_int(seq[0])
+        except Exception:
+            pass
+        return 0
+
+    def _enum_to_int(self, value) -> int:
+        try:
+            return int(value)
+        except Exception:
+            pass
+        raw = getattr(value, "value", None)
+        if raw is not None:
+            try:
+                return int(raw)
+            except Exception:
+                pass
+        return 0
+
+    def _keyseq_item_to_int(self, value) -> int:
+        code = self._enum_to_int(value)
+        if code:
+            return code
+        to_combined = getattr(value, "toCombined", None)
+        if callable(to_combined):
+            try:
+                return int(to_combined())
+            except Exception:
+                pass
+        return 0
+
+    def _run_qt_shortcut_action(self, combo: int) -> bool:
+        if not combo:
+            return False
+        action_by_combo: dict[int, str] = {}
+        for action, seqs in self.qt_shortcuts.items():
+            for seq in seqs:
+                action_by_combo.setdefault(int(seq), action)
+        action = action_by_combo.get(int(combo), "")
+        if not action:
+            return False
+        if action == "reload_rtl":
+            self.reload_rtl()
+            return True
+        if action == "reload_all":
+            self.reload_all()
+            return True
+        if action == "reload_wave":
+            self.reload_wave()
+            return True
+        return False
 
     def _load_session(self) -> dict:
         p = self._session_path()
@@ -2060,6 +2237,14 @@ class SvViewQtWindow(QMainWindow):
 
     def _arg_filelists(self) -> List[str]:
         raw = getattr(self.args, "filelist", [])
+        if isinstance(raw, str):
+            vals = [raw] if raw else []
+        else:
+            vals = [x for x in raw if x]
+        return [os.path.abspath(x) for x in vals]
+
+    def _arg_rtl_files(self) -> List[str]:
+        raw = getattr(self.args, "rtl_file", [])
         if isinstance(raw, str):
             vals = [raw] if raw else []
         else:
@@ -6778,12 +6963,14 @@ class SvViewQtWindow(QMainWindow):
         self.signal_entry.setText(resolved)
         self._follow_hierarchy_for_signal(resolved)
         include_control = bool(self.include_control_check.isChecked())
+        include_clock = bool(self.include_clock_check.isChecked())
         include_ports = bool(self.include_ports_check.isChecked())
         drivers, loads = query_signal(
             self.connectivity,
             resolved,
             recursive=False,
             include_control=include_control,
+            include_clock=include_clock,
             include_ports=include_ports,
         )
         port_hint = ""
@@ -6793,6 +6980,7 @@ class SvViewQtWindow(QMainWindow):
                 resolved,
                 recursive=False,
                 include_control=include_control,
+                include_clock=include_clock,
                 include_ports=True,
             )
             if port_drivers or port_loads:
@@ -6804,16 +6992,18 @@ class SvViewQtWindow(QMainWindow):
         for sig, loc in loads:
             self.load_list.addItem(f"{sig} -> {loc.file}:{loc.line}")
         ctrl = "with-control" if include_control else "data-only"
+        clk = "with-clock" if include_clock else "no-clock"
         ports = "with-ports" if include_ports else "no-ports"
         self.set_status(
-            f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {ports}){port_hint}"
+            f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {clk}, {ports}){port_hint}"
         )
         self._append_trace(
-            f"trace {resolved} ({ctrl}, {ports})",
+            f"trace {resolved} ({ctrl}, {clk}, {ports})",
             {
                 "type": "signal-trace",
                 "signal": resolved,
                 "include_control": include_control,
+                "include_clock": include_clock,
                 "include_ports": include_ports,
             },
         )
@@ -7056,6 +7246,7 @@ class SvViewQtWindow(QMainWindow):
             if sig:
                 self.signal_entry.setText(sig)
                 self.include_control_check.setChecked(bool(action.get("include_control", False)))
+                self.include_clock_check.setChecked(bool(action.get("include_clock", True)))
                 self.include_ports_check.setChecked(bool(action.get("include_ports", False)))
                 self.search_signal()
             return
@@ -7181,12 +7372,33 @@ class SvViewQtWindow(QMainWindow):
             if clear_trace:
                 self.clear_trace_log()
             return True
+        if self.loaded_rtl_files:
+            valid = [p for p in self.loaded_rtl_files if os.path.isfile(p)]
+            if valid:
+                self.loaded_filelist_paths = []
+                self.loaded_filelist_path = ""
+                self.loaded_dir_path = ""
+                self._parse_files(valid, [])
+                self.set_status("RTL reloaded")
+                if clear_trace:
+                    self.clear_trace_log()
+                return True
         arg_filelists = [p for p in self._arg_filelists() if os.path.isfile(p)]
         if arg_filelists:
             self.loaded_filelist_paths = arg_filelists
             self.loaded_filelist_path = arg_filelists[0]
             files, slang_args = self._read_multiple_filelists(arg_filelists)
             self._parse_files(files, slang_args)
+            self.set_status("RTL reloaded")
+            if clear_trace:
+                self.clear_trace_log()
+            return True
+        arg_rtl_files = [p for p in self._arg_rtl_files() if os.path.isfile(p)]
+        if arg_rtl_files:
+            self.loaded_filelist_paths = []
+            self.loaded_filelist_path = ""
+            self.loaded_dir_path = ""
+            self._parse_files(arg_rtl_files, [])
             self.set_status("RTL reloaded")
             if clear_trace:
                 self.clear_trace_log()
@@ -7205,15 +7417,24 @@ class SvViewQtWindow(QMainWindow):
             super().keyPressEvent(event)
             return
         mods = event.modifiers() if hasattr(event, "modifiers") else 0
-        ctrl_pressed = bool(mods & Qt.ControlModifier)
+        ctrl_mask = self._enum_to_int(getattr(Qt, "ControlModifier", 0))
+        ctrl_pressed = bool(self._enum_to_int(mods) & ctrl_mask)
         handled = False
-        if ctrl_pressed and hasattr(event, "key"):
-            key = int(event.key())
+        combo = self._shortcut_combo_for_event(event)
+        if self._run_qt_shortcut_action(combo):
+            handled = True
+        if (not handled) and ctrl_pressed and hasattr(event, "key"):
+            key = self._enum_to_int(event.key())
             tab = self._current_right_tab_name()
-            plus_keys = {int(Qt.Key_Equal), int(Qt.Key_Plus)}
-            minus_keys = {int(Qt.Key_Minus)}
+            plus_keys = {
+                self._enum_to_int(getattr(Qt, "Key_Equal", 0)),
+                self._enum_to_int(getattr(Qt, "Key_Plus", 0)),
+            }
+            plus_keys.discard(0)
+            minus_keys = {self._enum_to_int(getattr(Qt, "Key_Minus", 0))}
             if hasattr(Qt, "Key_Underscore"):
-                minus_keys.add(int(Qt.Key_Underscore))
+                minus_keys.add(self._enum_to_int(getattr(Qt, "Key_Underscore", 0)))
+            minus_keys.discard(0)
             if key in plus_keys:
                 if tab == "RTL Structure":
                     self.adjust_rtl_structure_zoom(1.25)
@@ -7228,7 +7449,7 @@ class SvViewQtWindow(QMainWindow):
                 elif tab == "Schematic":
                     self.adjust_schematic_zoom(0.8)
                     handled = True
-            elif key == int(Qt.Key_0):
+            elif key == self._enum_to_int(getattr(Qt, "Key_0", 0)):
                 if tab == "RTL Structure":
                     self.fit_rtl_structure()
                     handled = True

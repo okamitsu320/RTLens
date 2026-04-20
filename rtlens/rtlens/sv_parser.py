@@ -355,6 +355,19 @@ def _extract_clock_reset(text: str) -> tuple[List[str], List[str]]:
     return clocks, resets
 
 
+def _extract_sensitivity_signals(text: str) -> List[str]:
+    """Extract deduplicated signal identifiers from an event-control list."""
+    out: List[str] = []
+    ev = re.search(r"@\s*\((.*?)\)", text, re.S)
+    if not ev:
+        return out
+    body = ev.group(1)
+    for tok in _ids_in_expr(body):
+        if tok not in out:
+            out.append(tok)
+    return out
+
+
 def _split_top_level_csv(text: str) -> List[str]:
     parts: List[str] = []
     cur: List[str] = []
@@ -516,7 +529,7 @@ def parse_sv_files(files: Iterable[str], defined_macros: Optional[Set[str]] = No
                                 break
                             i += 1
                     block_text = "\n".join(block_lines)
-                    parse_text = block_text if not single_stmt else _strip_proc_prefix(kind, block_lines[0])
+                    parse_text = _strip_proc_prefix(kind, block_text if not single_stmt else block_lines[0])
                     writes: List[str] = []
                     for m_assign in STMT_ASSIGN_RE.finditer(parse_text):
                         lhs_ids = _base_lhs_ids(m_assign.group(1))
@@ -528,6 +541,7 @@ def parse_sv_files(files: Iterable[str], defined_macros: Optional[Set[str]] = No
                     for tok in reads:
                         if tok not in dedup_reads:
                             dedup_reads.append(tok)
+                    sensitivity_signals = _extract_sensitivity_signals(block_text)
                     clocks, resets = _extract_clock_reset(block_text)
                     stmt_summary = [ln.strip() for ln in block_lines if ln.strip()][:4]
                     mod.always_blocks.append(
@@ -537,6 +551,7 @@ def parse_sv_files(files: Iterable[str], defined_macros: Optional[Set[str]] = No
                             line_end=i + 1,
                             reads=dedup_reads,
                             writes=writes,
+                            sensitivity_signals=sensitivity_signals,
                             clock_signals=clocks,
                             reset_signals=resets,
                             stmt_summary=stmt_summary,
