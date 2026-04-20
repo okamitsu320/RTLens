@@ -13,6 +13,8 @@ rtlens --filelist path/to/vlist --top MyTopModule --wave path/to/dump.vcd
 rtlens --filelist path/to/vlist --top MyTopModule --editor-cmd "code --goto {file}:{line}"
 ```
 
+運用引き継ぎ（Codex向け）は [HANDOVER_CODEX_JA.md](HANDOVER_CODEX_JA.md) を参照してください。
+
 ## Runnable verification samples (repository included RTL)
 
 Linux/macOS:
