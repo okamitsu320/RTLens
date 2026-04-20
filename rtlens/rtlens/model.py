@@ -72,6 +72,9 @@ class AlwaysBlock:
         reads: Identifiers appearing on the right-hand side of assignments
             or in expressions inside the block.
         writes: Identifiers assigned (``=`` or ``<=``) inside the block.
+        sensitivity_signals: Identifiers appearing in the event-control
+            sensitivity list (for example ``always_ff @(posedge clk or
+            negedge rst_n)``).
         clock_signals: Signals heuristically identified as clocks (names
             containing ``"clk"`` or ``"clock"`` in the sensitivity list).
         reset_signals: Signals heuristically identified as resets (names
@@ -84,6 +87,7 @@ class AlwaysBlock:
     line_end: int
     reads: List[str]
     writes: List[str]
+    sensitivity_signals: List[str] = field(default_factory=list)
     clock_signals: List[str] = field(default_factory=list)
     reset_signals: List[str] = field(default_factory=list)
     stmt_summary: List[str] = field(default_factory=list)
@@ -237,6 +241,8 @@ class ConnectivityDB:
     Attributes:
         drives_data: Data-flow edges: ``{src_signal: {dst_signal, …}}``.
         drives_control: Control-flow edges (e.g. enable, select signals).
+        drives_clock: Clock-flow edges from event-control clocks to procedural
+            assignments (clock-only dependency graph).
         alias_edges: Port-alias edges introduced by port connections.
         signal_to_source: Maps each signal to its declaration location.
         driver_sites: Non-port assignment locations per signal.
@@ -244,10 +250,12 @@ class ConnectivityDB:
         load_sites_data: Data-read locations per signal.
         load_sites_port: Port-read locations per signal.
         load_sites_control: Control-read locations per signal.
+        load_sites_clock: Clock-read locations from event controls.
     """
     # path.signal -> list(path.signal)
     drives_data: Dict[str, Set[str]] = field(default_factory=dict)
     drives_control: Dict[str, Set[str]] = field(default_factory=dict)
+    drives_clock: Dict[str, Set[str]] = field(default_factory=dict)
     alias_edges: Dict[str, Set[str]] = field(default_factory=dict)
     signal_to_source: Dict[str, SourceLoc] = field(default_factory=dict)
     driver_sites: Dict[str, List[SourceLoc]] = field(default_factory=dict)
@@ -255,15 +263,24 @@ class ConnectivityDB:
     load_sites_data: Dict[str, List[SourceLoc]] = field(default_factory=dict)
     load_sites_port: Dict[str, List[SourceLoc]] = field(default_factory=dict)
     load_sites_control: Dict[str, List[SourceLoc]] = field(default_factory=dict)
+    load_sites_clock: Dict[str, List[SourceLoc]] = field(default_factory=dict)
 
     def add_edge(self, src: str, dst: str, kind: str = "data") -> None:
-        table = self.drives_control if kind == "control" else self.drives_data
+        if kind == "control":
+            table = self.drives_control
+        elif kind == "clock":
+            table = self.drives_clock
+        else:
+            table = self.drives_data
         table.setdefault(src, set()).add(dst)
         table.setdefault(dst, set())
-        # Keep keys visible in both maps for consistent traversal.
-        other = self.drives_data if table is self.drives_control else self.drives_control
-        other.setdefault(src, set())
-        other.setdefault(dst, set())
+        # Keep keys visible in all maps for consistent traversal.
+        self.drives_data.setdefault(src, set())
+        self.drives_data.setdefault(dst, set())
+        self.drives_control.setdefault(src, set())
+        self.drives_control.setdefault(dst, set())
+        self.drives_clock.setdefault(src, set())
+        self.drives_clock.setdefault(dst, set())
         self.alias_edges.setdefault(src, set())
         self.alias_edges.setdefault(dst, set())
 
@@ -280,6 +297,8 @@ class ConnectivityDB:
     def add_load_site(self, sig: str, loc: SourceLoc, kind: str = "data") -> None:
         if kind == "control":
             table = self.load_sites_control
+        elif kind == "clock":
+            table = self.load_sites_clock
         elif kind == "port":
             table = self.load_sites_port
         else:

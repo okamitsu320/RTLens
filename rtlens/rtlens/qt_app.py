@@ -64,7 +64,7 @@ from .wave_bridge import WaveBridgeError, create_wave_bridge
 
 try:
     from PySide6.QtCore import QByteArray, QObject, QPointF, QTimer, Qt, QUrl, Slot
-    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF
+    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
         QAbstractScrollArea,
@@ -150,6 +150,7 @@ except ModuleNotFoundError:
     QMenu = object
     QSvgRenderer = object
     QScrollArea = object
+    QKeySequence = object
 
 SV_KEYWORDS = {
     "module",
@@ -201,6 +202,12 @@ SV_TYPE_KEYWORDS = {
     "localparam",
     "parameter",
     "genvar",
+}
+
+DEFAULT_QT_SHORTCUTS = {
+    "reload_rtl": ["Ctrl+R"],
+    "reload_all": ["Ctrl+Shift+R"],
+    "reload_wave": ["Ctrl+Shift+W"],
 }
 
 
@@ -352,6 +359,8 @@ class SvViewQtWindow(QMainWindow):
         self.wave: Optional[WaveDB] = None
         self.wave_signals: List[str] = []
         self.trace_actions: List[dict] = []
+        self.qt_shortcuts: dict[str, list[int]] = {}
+        self._qt_shortcut_notes: List[str] = []
         self.nav_history: List[tuple[str, int]] = []
         self.nav_index: int = -1
         self.recent_locs: List[tuple[str, int]] = []
@@ -476,6 +485,9 @@ class SvViewQtWindow(QMainWindow):
         self.hier_to_path: dict[int, str] = {}
         self.hier_path_to_item: dict[str, QTreeWidgetItem] = {}
         self._suppress_hier_select: bool = False
+        self.qt_shortcuts = self._load_qt_shortcuts()
+        if self._qt_shortcut_notes:
+            self.compile_log += "\n\n[svview] qt shortcut config\n" + "\n".join(self._qt_shortcut_notes)
         self._build_ui()
         self._apply_theme()
         self._start_wave_event_timer()
@@ -552,6 +564,10 @@ class SvViewQtWindow(QMainWindow):
         self.include_control_check = QCheckBox("Include control deps")
         self.include_control_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
         opt_row.addWidget(self.include_control_check)
+        self.include_clock_check = QCheckBox("Include clock deps")
+        self.include_clock_check.setChecked(True)
+        self.include_clock_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
+        opt_row.addWidget(self.include_clock_check)
         self.include_ports_check = QCheckBox("Include port sites")
         self.include_ports_check.stateChanged.connect(lambda _s: self.search_signal_if_any())
         opt_row.addWidget(self.include_ports_check)
@@ -1829,6 +1845,107 @@ class SvViewQtWindow(QMainWindow):
     def _session_path(self) -> Path:
         cfg = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
         return cfg / "rtlens" / "session_qt.json"
+
+    def _shortcut_config_path(self) -> Path:
+        cfg = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
+        return cfg / "rtlens" / "shortcuts_qt.json"
+
+    def _parse_qt_shortcut_values(self, value: object) -> List[str]:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            return [text]
+        if isinstance(value, list):
+            out: List[str] = []
+            for it in value:
+                if not isinstance(it, str):
+                    continue
+                text = it.strip()
+                if text:
+                    out.append(text)
+            return out
+        return []
+
+    def _shortcut_values_to_keyseq_ints(self, values: List[str]) -> List[int]:
+        out: List[int] = []
+        for text in values:
+            try:
+                seq = QKeySequence(text)
+            except Exception:
+                self._qt_shortcut_notes.append(f"invalid sequence syntax: {text!r}")
+                continue
+            count = int(seq.count()) if hasattr(seq, "count") else 0
+            if count <= 0:
+                self._qt_shortcut_notes.append(f"ignored empty sequence: {text!r}")
+                continue
+            for i in range(count):
+                try:
+                    code = int(seq[i])
+                except Exception:
+                    code = 0
+                if code and code not in out:
+                    out.append(code)
+        return out
+
+    def _load_qt_shortcuts(self) -> dict[str, list[int]]:
+        out: dict[str, list[int]] = {}
+        self._qt_shortcut_notes = []
+        for action, values in DEFAULT_QT_SHORTCUTS.items():
+            out[action] = self._shortcut_values_to_keyseq_ints(list(values))
+        path = self._shortcut_config_path()
+        if not path.is_file():
+            return out
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self._qt_shortcut_notes.append(f"failed to read {path}: {e}")
+            return out
+        if not isinstance(data, dict):
+            self._qt_shortcut_notes.append(f"ignored {path}: top-level JSON must be an object")
+            return out
+        for action in DEFAULT_QT_SHORTCUTS.keys():
+            if action not in data:
+                continue
+            seq_values = self._parse_qt_shortcut_values(data.get(action))
+            if not seq_values:
+                out[action] = []
+                self._qt_shortcut_notes.append(f"{action}: disabled by config")
+                continue
+            parsed = self._shortcut_values_to_keyseq_ints(seq_values)
+            if parsed:
+                out[action] = parsed
+            else:
+                self._qt_shortcut_notes.append(f"{action}: no valid shortcuts found in config")
+        return out
+
+    def _shortcut_combo_for_event(self, event) -> int:
+        if Qt is object or not hasattr(event, "key"):
+            return 0
+        mods = int(event.modifiers()) if hasattr(event, "modifiers") else 0
+        key = int(event.key())
+        return int(QKeySequence(mods | key)[0])
+
+    def _run_qt_shortcut_action(self, combo: int) -> bool:
+        if not combo:
+            return False
+        action_by_combo: dict[int, str] = {}
+        for action, seqs in self.qt_shortcuts.items():
+            for seq in seqs:
+                action_by_combo.setdefault(int(seq), action)
+        action = action_by_combo.get(int(combo), "")
+        if not action:
+            return False
+        if action == "reload_rtl":
+            self.reload_rtl()
+            return True
+        if action == "reload_all":
+            self.reload_all()
+            return True
+        if action == "reload_wave":
+            self.reload_wave()
+            return True
+        return False
 
     def _load_session(self) -> dict:
         p = self._session_path()
@@ -6778,12 +6895,14 @@ class SvViewQtWindow(QMainWindow):
         self.signal_entry.setText(resolved)
         self._follow_hierarchy_for_signal(resolved)
         include_control = bool(self.include_control_check.isChecked())
+        include_clock = bool(self.include_clock_check.isChecked())
         include_ports = bool(self.include_ports_check.isChecked())
         drivers, loads = query_signal(
             self.connectivity,
             resolved,
             recursive=False,
             include_control=include_control,
+            include_clock=include_clock,
             include_ports=include_ports,
         )
         port_hint = ""
@@ -6793,6 +6912,7 @@ class SvViewQtWindow(QMainWindow):
                 resolved,
                 recursive=False,
                 include_control=include_control,
+                include_clock=include_clock,
                 include_ports=True,
             )
             if port_drivers or port_loads:
@@ -6804,16 +6924,18 @@ class SvViewQtWindow(QMainWindow):
         for sig, loc in loads:
             self.load_list.addItem(f"{sig} -> {loc.file}:{loc.line}")
         ctrl = "with-control" if include_control else "data-only"
+        clk = "with-clock" if include_clock else "no-clock"
         ports = "with-ports" if include_ports else "no-ports"
         self.set_status(
-            f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {ports}){port_hint}"
+            f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {clk}, {ports}){port_hint}"
         )
         self._append_trace(
-            f"trace {resolved} ({ctrl}, {ports})",
+            f"trace {resolved} ({ctrl}, {clk}, {ports})",
             {
                 "type": "signal-trace",
                 "signal": resolved,
                 "include_control": include_control,
+                "include_clock": include_clock,
                 "include_ports": include_ports,
             },
         )
@@ -7056,6 +7178,7 @@ class SvViewQtWindow(QMainWindow):
             if sig:
                 self.signal_entry.setText(sig)
                 self.include_control_check.setChecked(bool(action.get("include_control", False)))
+                self.include_clock_check.setChecked(bool(action.get("include_clock", True)))
                 self.include_ports_check.setChecked(bool(action.get("include_ports", False)))
                 self.search_signal()
             return
@@ -7207,7 +7330,10 @@ class SvViewQtWindow(QMainWindow):
         mods = event.modifiers() if hasattr(event, "modifiers") else 0
         ctrl_pressed = bool(mods & Qt.ControlModifier)
         handled = False
-        if ctrl_pressed and hasattr(event, "key"):
+        combo = self._shortcut_combo_for_event(event)
+        if self._run_qt_shortcut_action(combo):
+            handled = True
+        if (not handled) and ctrl_pressed and hasattr(event, "key"):
             key = int(event.key())
             tab = self._current_right_tab_name()
             plus_keys = {int(Qt.Key_Equal), int(Qt.Key_Plus)}

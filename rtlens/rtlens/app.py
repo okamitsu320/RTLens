@@ -186,6 +186,12 @@ class SvViewApp:
         ).pack(
             anchor=tk.W, padx=4, pady=2
         )
+        self.include_clock_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            sig_right, text="Include clock deps", variable=self.include_clock_var, command=self.search_signal_if_any
+        ).pack(
+            anchor=tk.W, padx=4, pady=2
+        )
         self.include_port_sites_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             sig_right, text="Include port sites", variable=self.include_port_sites_var, command=self.search_signal_if_any
@@ -466,6 +472,7 @@ class SvViewApp:
             self.signal_entry.delete(0, tk.END)
             self.signal_entry.insert(0, sig)
             self.include_control_var.set(bool(action.get("include_control", False)))
+            self.include_clock_var.set(bool(action.get("include_clock", True)))
             self.include_port_sites_var.set(bool(action.get("include_ports", False)))
             self.search_signal()
             return
@@ -1176,14 +1183,25 @@ class SvViewApp:
         self._follow_hierarchy_for_signal(q)
 
         include_control = bool(self.include_control_var.get())
+        include_clock = bool(self.include_clock_var.get())
         include_ports = bool(self.include_port_sites_var.get())
         drivers, loads = query_signal(
-            self.connectivity, q, recursive=False, include_control=include_control, include_ports=include_ports
+            self.connectivity,
+            q,
+            recursive=False,
+            include_control=include_control,
+            include_clock=include_clock,
+            include_ports=include_ports,
         )
         port_hint = ""
         if (not include_ports) and (not drivers) and (not loads):
             port_drivers, port_loads = query_signal(
-                self.connectivity, q, recursive=False, include_control=include_control, include_ports=True
+                self.connectivity,
+                q,
+                recursive=False,
+                include_control=include_control,
+                include_clock=include_clock,
+                include_ports=True,
             )
             if port_drivers or port_loads:
                 port_hint = " | hint: enable 'Include port sites'"
@@ -1196,14 +1214,16 @@ class SvViewApp:
             self.load_list.insert(tk.END, f"{sig} -> {loc.file}:{loc.line}")
 
         ctrl = "with-control" if include_control else "data-only"
+        clk = "with-clock" if include_clock else "no-clock"
         ports = "with-ports" if include_ports else "no-ports"
-        self.set_status(f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {ports}){port_hint}")
+        self.set_status(f"Drivers: {len(drivers)}, Loads: {len(loads)} (direct, {ctrl}, {clk}, {ports}){port_hint}")
         self._append_trace(
-            f"trace {q} ({ctrl}, {ports})",
+            f"trace {q} ({ctrl}, {clk}, {ports})",
             {
                 "type": "signal-trace",
                 "signal": q,
                 "include_control": include_control,
+                "include_clock": include_clock,
                 "include_ports": include_ports,
             },
         )

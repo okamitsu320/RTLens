@@ -171,3 +171,23 @@ class TestQuerySignalFallbackProcedural:
         )
         assert len(drivers) >= 1
         assert len(loads) >= 1
+
+    def test_clock_dependency_toggle_for_counter_clk(self):
+        _drivers0, loads0 = query_signal(
+            self.cdb,
+            "counter.clk",
+            recursive=False,
+            include_control=False,
+            include_clock=False,
+            include_ports=False,
+        )
+        _drivers1, loads1 = query_signal(
+            self.cdb,
+            "counter.clk",
+            recursive=False,
+            include_control=False,
+            include_clock=True,
+            include_ports=False,
+        )
+        assert len(loads0) == 0
+        assert len(loads1) >= 1

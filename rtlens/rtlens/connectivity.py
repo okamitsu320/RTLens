@@ -101,19 +101,28 @@ def build_connectivity(db: DesignDB) -> ConnectivityDB:
                 write_abs_list.append(w_abs)
                 cdb.signal_to_source.setdefault(w_abs, blk_loc)
                 cdb.add_driver_site(w_abs, blk_loc)
-            for r in blk.reads:
+            sensitivity_set = set(getattr(blk, "sensitivity_signals", []) or [])
+            clock_set = set(blk.clock_signals or [])
+            data_reads = [r for r in blk.reads if r not in sensitivity_set]
+            for r in data_reads:
                 r_abs = _abs(path, r)
                 cdb.signal_to_source.setdefault(r_abs, blk_loc)
                 cdb.add_load_site(r_abs, blk_loc, kind="data")
                 for w_abs in write_abs_list:
                     cdb.add_edge(r_abs, w_abs, kind="data")
-            control_reads = list(blk.clock_signals) + list(blk.reset_signals)
+            control_reads = list(blk.reset_signals)
             for c in control_reads:
                 c_abs = _abs(path, c)
                 cdb.signal_to_source.setdefault(c_abs, blk_loc)
                 cdb.add_load_site(c_abs, blk_loc, kind="control")
                 for w_abs in write_abs_list:
                     cdb.add_edge(c_abs, w_abs, kind="control")
+            for c in clock_set:
+                c_abs = _abs(path, c)
+                cdb.signal_to_source.setdefault(c_abs, blk_loc)
+                cdb.add_load_site(c_abs, blk_loc, kind="clock")
+                for w_abs in write_abs_list:
+                    cdb.add_edge(c_abs, w_abs, kind="clock")
 
         for inst in mod.instances:
             child_path = f"{path}.{inst.name}"
@@ -149,13 +158,16 @@ def build_connectivity(db: DesignDB) -> ConnectivityDB:
     return cdb
 
 
-def _neighbor_map(cdb: ConnectivityDB, include_control: bool) -> Dict[str, Set[str]]:
+def _neighbor_map(cdb: ConnectivityDB, include_control: bool, include_clock: bool) -> Dict[str, Set[str]]:
     """Build an adjacency map (signal → set of driven signals) for graph traversal."""
     out: Dict[str, Set[str]] = {}
     for s, ds in cdb.drives_data.items():
         out.setdefault(s, set()).update(ds)
     if include_control:
         for s, ds in cdb.drives_control.items():
+            out.setdefault(s, set()).update(ds)
+    if include_clock:
+        for s, ds in cdb.drives_clock.items():
             out.setdefault(s, set()).update(ds)
     return out
 
@@ -174,9 +186,14 @@ def _alias_closure(cdb: ConnectivityDB, start: str) -> Set[str]:
     return seen
 
 
-def _collect_forward(cdb: ConnectivityDB, start: str, include_control: bool) -> Set[str]:
+def _collect_forward(
+    cdb: ConnectivityDB,
+    start: str,
+    include_control: bool,
+    include_clock: bool,
+) -> Set[str]:
     """Return all signals reachable from start by following drive edges forward (BFS)."""
-    neigh = _neighbor_map(cdb, include_control)
+    neigh = _neighbor_map(cdb, include_control, include_clock)
     seen: Set[str] = set()
     q = deque([start])
     seen.add(start)
@@ -192,9 +209,14 @@ def _collect_forward(cdb: ConnectivityDB, start: str, include_control: bool) -> 
     return out
 
 
-def _collect_reverse(cdb: ConnectivityDB, start: str, include_control: bool) -> Set[str]:
+def _collect_reverse(
+    cdb: ConnectivityDB,
+    start: str,
+    include_control: bool,
+    include_clock: bool,
+) -> Set[str]:
     """Return all signals that can reach start by following drive edges in reverse (BFS)."""
-    rev = _reverse_map(cdb, include_control)
+    rev = _reverse_map(cdb, include_control, include_clock)
 
     seen: Set[str] = set()
     q = deque([start])
@@ -211,9 +233,9 @@ def _collect_reverse(cdb: ConnectivityDB, start: str, include_control: bool) -> 
     return out
 
 
-def _reverse_map(cdb: ConnectivityDB, include_control: bool) -> Dict[str, Set[str]]:
+def _reverse_map(cdb: ConnectivityDB, include_control: bool, include_clock: bool) -> Dict[str, Set[str]]:
     """Build the transpose of _neighbor_map (driven signal → set of drivers)."""
-    neigh = _neighbor_map(cdb, include_control)
+    neigh = _neighbor_map(cdb, include_control, include_clock)
     rev: Dict[str, Set[str]] = {}
     for s, dsts in neigh.items():
         for d in dsts:
@@ -227,6 +249,7 @@ def query_signal(
     abs_signal: str,
     recursive: bool = False,
     include_control: bool = False,
+    include_clock: bool = True,
     include_ports: bool = False,
 ) -> Tuple[List[Tuple[str, SourceLoc]], List[Tuple[str, SourceLoc]]]:
     """Find the drivers and loads of a signal.
@@ -236,8 +259,11 @@ def query_signal(
         abs_signal:      Fully qualified signal name (e.g. "top.u_core.data_out").
         recursive:       If True, follow the entire transitive drive graph (BFS).
                          If False, return only direct driver/load sites from the DB.
-        include_control: Include control-flow drive edges (clock, enable, reset)
+        include_control: Include control-flow drive edges (for example enable /
+                         reset gating)
                          in addition to data edges.
+        include_clock:   Include clock-flow dependencies extracted from event
+                         controls (for example ``always_ff @(posedge clk ...)``).
         include_ports:   Include port driver/load sites in non-recursive mode.
 
     Returns:
@@ -269,15 +295,16 @@ def query_signal(
                 lsrc.extend([(s, loc) for loc in cdb.load_sites_port.get(s, [])])
             if include_control:
                 lsrc.extend([(s, loc) for loc in cdb.load_sites_control.get(s, [])])
+            if include_clock:
+                lsrc.extend([(s, loc) for loc in cdb.load_sites_clock.get(s, [])])
 
         drivers = uniq_pairs(dsrc)
         loads = uniq_pairs(lsrc)
         return drivers, loads
 
-    neigh = _neighbor_map(cdb, include_control)
     if recursive:
-        drivers_abs = sorted(_collect_reverse(cdb, abs_signal, include_control))
-        loads_abs = sorted(_collect_forward(cdb, abs_signal, include_control))
+        drivers_abs = sorted(_collect_reverse(cdb, abs_signal, include_control, include_clock))
+        loads_abs = sorted(_collect_forward(cdb, abs_signal, include_control, include_clock))
     else:
         drivers_abs = []
         loads_abs = []
