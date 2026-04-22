@@ -14,6 +14,16 @@ def test_ui_tk_is_still_selectable():
     assert args.ui == "tk"
 
 
+def test_editor_cmd_default_is_none_for_cli_omission_detection():
+    args = build_arg_parser().parse_args([])
+    assert args.editor_cmd is None
+
+
+def test_editor_cmd_accepts_explicit_template():
+    args = build_arg_parser().parse_args(["--editor-cmd", "code --goto {file}:{line}"])
+    assert args.editor_cmd == "code --goto {file}:{line}"
+
+
 def test_collect_rtl_inputs_accepts_rtl_file_only(tmp_path):
     rtl = tmp_path / "one.sv"
     rtl.write_text("module one; endmodule\n", encoding="utf-8")

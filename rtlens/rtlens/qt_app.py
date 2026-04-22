@@ -29,6 +29,7 @@ from .callable_resolver import (
     token_variants,
 )
 from .editor_cmd import build_editor_argv
+from .editor_config import EDITOR_PRESETS, detect_available_presets, load_editor_template, save_editor_template
 from .model import ConnectivityDB, DesignDB, ModuleDef
 from .netlistsvg_view import (
     NetlistSvgResult,
@@ -64,7 +65,7 @@ from .wave_bridge import WaveBridgeError, create_wave_bridge
 
 try:
     from PySide6.QtCore import QByteArray, QObject, QPointF, QTimer, Qt, QUrl, Slot
-    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
+    from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
         QAbstractScrollArea,
@@ -72,6 +73,7 @@ try:
         QCheckBox,
         QComboBox,
         QColorDialog,
+        QDialog,
         QFileDialog,
         QInputDialog,
         QGraphicsScene,
@@ -151,6 +153,8 @@ except ModuleNotFoundError:
     QSvgRenderer = object
     QScrollArea = object
     QKeySequence = object
+    QAction = object
+    QDialog = object
 
 SV_KEYWORDS = {
     "module",
@@ -488,6 +492,7 @@ class SvViewQtWindow(QMainWindow):
         self.qt_shortcuts = self._load_qt_shortcuts()
         if self._qt_shortcut_notes:
             self.compile_log += "\n\n[svview] qt shortcut config\n" + "\n".join(self._qt_shortcut_notes)
+        self._effective_editor_cmd: str = self._resolve_effective_editor_cmd()
         self._build_ui()
         self._apply_theme()
         self._start_wave_event_timer()
@@ -1011,6 +1016,7 @@ class SvViewQtWindow(QMainWindow):
         self.status_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.status_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.status_view)
+        self._build_menu_bar()
 
     def _on_rtl_mode_changed(self) -> None:
         self.rtl_structure_dirty = True
@@ -1873,6 +1879,128 @@ class SvViewQtWindow(QMainWindow):
     def set_status(self, text: str) -> None:
         s = text or ""
         self.status_view.setPlainText(s)
+
+    def _resolve_effective_editor_cmd(self) -> str:
+        cli_template = getattr(self.args, "editor_cmd", None)
+        if cli_template is not None:
+            return str(cli_template)
+        saved_template = load_editor_template()
+        if saved_template:
+            return saved_template
+        from .app_cli import _default_editor_cmd_template
+
+        return _default_editor_cmd_template()
+
+    def _build_menu_bar(self) -> None:
+        if QAction is object:
+            return
+        bar = self.menuBar()
+        if bar is None:
+            return
+        tools_menu = bar.addMenu("Tools")
+        self._editor_settings_action = QAction("Editor Settings...", self)
+        self._editor_settings_action.triggered.connect(self.open_editor_settings_dialog)
+        tools_menu.addAction(self._editor_settings_action)
+
+    def open_editor_settings_dialog(self) -> None:
+        if QDialog is object:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Editor Settings")
+        dlg.setModal(True)
+        layout = QVBoxLayout(dlg)
+
+        available_keys = set(detect_available_presets())
+        warning = QLabel("Warning: no preset editors found in PATH. Enter a custom command.")
+        warning.setStyleSheet("color:#b00020; font-weight:600;")
+        warning.setVisible(len(available_keys) == 0)
+        layout.addWidget(warning)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Preset:"))
+        preset_combo = QComboBox(dlg)
+        for key, meta in EDITOR_PRESETS.items():
+            label = str(meta.get("label", key))
+            state = "available" if key in available_keys else "not found"
+            preset_combo.addItem(f"{label} ({state})", key)
+        preset_row.addWidget(preset_combo, 1)
+        layout.addLayout(preset_row)
+
+        command_row = QHBoxLayout()
+        command_row.addWidget(QLabel("Command:"))
+        command_edit = QLineEdit(dlg)
+        command_edit.setText(str(self._effective_editor_cmd or ""))
+        command_row.addWidget(command_edit, 1)
+        layout.addLayout(command_row)
+
+        placeholders = QLabel("Placeholders: {file}  {line}  {basename}  {dir}")
+        layout.addWidget(placeholders)
+
+        buttons = QHBoxLayout()
+        test_btn = QPushButton("Test", dlg)
+        test_btn.setEnabled(bool(self.current_file))
+        ok_btn = QPushButton("OK", dlg)
+        cancel_btn = QPushButton("Cancel", dlg)
+        buttons.addWidget(test_btn)
+        buttons.addStretch(1)
+        buttons.addWidget(ok_btn)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+        current_tpl = str(self._effective_editor_cmd or "")
+        preset_templates = {k: str(v.get("template", "")) for k, v in EDITOR_PRESETS.items()}
+        selected_key = "custom"
+        for key, tpl in preset_templates.items():
+            if key == "custom":
+                continue
+            if tpl == current_tpl:
+                selected_key = key
+                break
+        preset_combo.blockSignals(True)
+        for i in range(preset_combo.count()):
+            if str(preset_combo.itemData(i)) == selected_key:
+                preset_combo.setCurrentIndex(i)
+                break
+        preset_combo.blockSignals(False)
+
+        def _on_preset_changed(index: int) -> None:
+            key = str(preset_combo.itemData(index) or "")
+            template = str(EDITOR_PRESETS.get(key, {}).get("template", ""))
+            command_edit.setText(template)
+
+        def _run_test() -> None:
+            if not self.current_file:
+                self.set_status("No source file selected")
+                return
+            line = self._line_from_source_cursor()
+            cmd_tpl = str(command_edit.text())
+            try:
+                argv = build_editor_argv(cmd_tpl, self.current_file, line)
+            except ValueError as e:
+                QMessageBox.critical(self, "RTLens", f"invalid editor command template: {e}")
+                return
+            try:
+                subprocess.Popen(argv, shell=False)
+                self.set_status(f"Opened editor: {self.current_file}:{line}")
+            except Exception as e:
+                QMessageBox.critical(self, "RTLens", f"failed to start editor: {e}")
+
+        def _accept() -> None:
+            template = str(command_edit.text())
+            try:
+                save_editor_template(template)
+            except Exception as e:
+                QMessageBox.critical(self, "RTLens", f"failed to save editor config: {e}")
+                return
+            self._effective_editor_cmd = template
+            self.set_status("Editor command updated")
+            dlg.accept()
+
+        preset_combo.currentIndexChanged.connect(_on_preset_changed)
+        test_btn.clicked.connect(_run_test)
+        ok_btn.clicked.connect(_accept)
+        cancel_btn.clicked.connect(dlg.reject)
+        dlg.exec()
 
     def _session_path(self) -> Path:
         cfg = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
@@ -6313,12 +6441,12 @@ class SvViewQtWindow(QMainWindow):
             self.set_status("No source file selected")
             return
         line = self._line_from_source_cursor()
-        cmd_tpl = getattr(self.args, "editor_cmd", "x-terminal-emulator -e vim +{line} {fileq}")
+        cmd_tpl = str(self._effective_editor_cmd or "")
         try:
             argv = build_editor_argv(cmd_tpl, self.current_file, line)
         except ValueError as e:
-            self.set_status(f"Invalid --editor-cmd template: {e}")
-            QMessageBox.critical(self, "RTLens", f"invalid --editor-cmd template: {e}")
+            self.set_status(f"Invalid editor command template: {e}")
+            QMessageBox.critical(self, "RTLens", f"invalid editor command template: {e}")
             return
         try:
             subprocess.Popen(argv, shell=False)

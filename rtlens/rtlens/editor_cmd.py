@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import shlex
 import string
 from typing import List
 
 
-_ALLOWED_FIELDS = {"file", "fileq", "line"}
+_ALLOWED_FIELDS = {"file", "fileq", "line", "basename", "dir"}
 
 
 def build_editor_argv(template: str, file_path: str, line: int) -> List[str]:
@@ -26,6 +27,8 @@ def build_editor_argv(template: str, file_path: str, line: int) -> List[str]:
         "file": shlex.quote(str(file_path)),
         "fileq": shlex.quote(str(file_path)),
         "line": int(line),
+        "basename": shlex.quote(os.path.basename(str(file_path))),
+        "dir": shlex.quote(os.path.dirname(os.path.abspath(str(file_path)))),
     }
     try:
         expanded = tpl.format(**mapping)

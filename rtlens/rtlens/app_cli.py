@@ -70,8 +70,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--editor-cmd",
-        default=_default_editor_cmd_template(),
-        help="external editor argv template (no shell; supports non-vim editors), use {file}/{fileq} and {line}",
+        default=None,
+        help=(
+            "external editor argv template (no shell; supports non-vim editors), "
+            "use {file}/{fileq}/{basename}/{dir} and {line}"
+        ),
     )
     p.add_argument(
         "--yosys-cmd",
@@ -373,6 +376,8 @@ def main() -> None:
 
             run_qt(args)
             return
+        if getattr(args, "editor_cmd", None) is None:
+            args.editor_cmd = _default_editor_cmd_template()
         app = SvViewApp(args)
         app.run()
     except RuntimeError as e:

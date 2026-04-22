@@ -17,6 +17,9 @@ __pycache__/
 *.tmp
 *.bak
 
+# Private AI collaboration notes (not tracked)
+.hiddendoc/
+
 # Wave dumps and traces
 *.vcd
 *.fst
