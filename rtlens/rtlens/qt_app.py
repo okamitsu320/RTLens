@@ -65,7 +65,7 @@ from .wave_bridge import WaveBridgeError, create_wave_bridge
 
 try:
     from PySide6.QtCore import QByteArray, QObject, QPointF, QTimer, Qt, QUrl, Slot
-    from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
+    from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPainterPath, QPen, QPixmap, QTextCursor, QBrush, QPolygonF, QKeySequence
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtWidgets import (
         QAbstractScrollArea,
@@ -153,7 +153,6 @@ except ModuleNotFoundError:
     QSvgRenderer = object
     QScrollArea = object
     QKeySequence = object
-    QAction = object
     QDialog = object
 
 SV_KEYWORDS = {
@@ -524,6 +523,9 @@ class SvViewQtWindow(QMainWindow):
         self.btn_open_editor = QPushButton("Open in editor")
         self.btn_open_editor.clicked.connect(self.open_external_editor)
         toolbar.addWidget(self.btn_open_editor)
+        self.btn_editor_settings = QPushButton("Editor Settings")
+        self.btn_editor_settings.clicked.connect(self.open_editor_settings_dialog)
+        toolbar.addWidget(self.btn_editor_settings)
         self.btn_open_wave = QPushButton("Load wave")
         self.btn_open_wave.clicked.connect(self.open_wave)
         toolbar.addWidget(self.btn_open_wave)
@@ -1016,7 +1018,6 @@ class SvViewQtWindow(QMainWindow):
         self.status_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.status_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.status_view)
-        self._build_menu_bar()
 
     def _on_rtl_mode_changed(self) -> None:
         self.rtl_structure_dirty = True
@@ -1890,17 +1891,6 @@ class SvViewQtWindow(QMainWindow):
         from .app_cli import _default_editor_cmd_template
 
         return _default_editor_cmd_template()
-
-    def _build_menu_bar(self) -> None:
-        if QAction is object:
-            return
-        bar = self.menuBar()
-        if bar is None:
-            return
-        tools_menu = bar.addMenu("Tools")
-        self._editor_settings_action = QAction("Editor Settings...", self)
-        self._editor_settings_action.triggered.connect(self.open_editor_settings_dialog)
-        tools_menu.addAction(self._editor_settings_action)
 
     def open_editor_settings_dialog(self) -> None:
         if QDialog is object:
